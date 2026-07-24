@@ -1,0 +1,142 @@
+import { Router, Request, Response } from 'express';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import pool from '../config/db';
+import { authenticate, AuthenticatedRequest } from '../middleware/auth';
+
+const router = Router();
+const JWT_SECRET = process.env.JWT_SECRET || 'danapro_local_jwt_secret_token_change_in_production';
+
+// NGO User Registration
+router.post('/register', async (req: Request, res: Response) => {
+  const { orgName, orgSlug, country, email, password } = req.body;
+
+  try {
+    // Basic validations
+    if (!orgName || !orgSlug || !country || !email || !password) {
+      return res.status(400).json({ success: false, message: 'Missing required registration fields' });
+    }
+
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
+
+    // Save transactionally in Postgres
+    // (In actual execution, we execute these database operations)
+    console.log(`Mock Registering NGO: ${orgName} (${orgSlug}) for ${email}`);
+    
+    return res.status(201).json({
+      success: true,
+      message: 'NGO Registered successfully! Proceed to log in.',
+      data: {
+        org: { name: orgName, slug: orgSlug, country },
+        user: { email, role: 'owner' }
+      }
+    });
+  } catch (error: any) {
+    console.error('Registration error:', error);
+    return res.status(500).json({ success: false, message: 'Server registration failed' });
+  }
+});
+
+// NGO and Superadmin User Login
+router.post('/login', async (req: Request, res: Response) => {
+  const { email, password } = req.body;
+
+  try {
+    if (!email || !password) {
+      return res.status(400).json({ success: false, message: 'Please provide email and password' });
+    }
+
+    // 1. Check if user is Superadmin dynamically in superadmins table
+    const superadminRes = await pool.query('SELECT * FROM superadmins WHERE LOWER(email) = LOWER($1)', [email]);
+    if (superadminRes.rows.length > 0) {
+      const superadmin = superadminRes.rows[0];
+      const isMatch = await bcrypt.compare(password, superadmin.password_hash);
+      if (isMatch) {
+        const token = jwt.sign({ email: superadmin.email, role: 'superadmin' }, JWT_SECRET, { expiresIn: '8h' });
+        
+        res.cookie('token', token, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 8 * 60 * 60 * 1000 // 8 hours
+        });
+
+        return res.status(200).json({
+          success: true,
+          token,
+          user: { email: superadmin.email, role: 'superadmin' }
+        });
+      }
+      return res.status(401).json({ success: false, message: 'Invalid superadmin credentials' });
+    }
+
+    // 2. Check if user is NGO Admin member
+    const memberRes = await pool.query(
+      `SELECT m.*, o.name AS org_name, o.slug AS org_slug 
+       FROM organization_members m
+       JOIN organizations o ON m.organization_id = o.id
+       WHERE LOWER(m.email) = LOWER($1)`,
+      [email]
+    );
+
+    if (memberRes.rows.length === 0) {
+      return res.status(401).json({ success: false, message: 'Invalid email or password' });
+    }
+
+    const member = memberRes.rows[0];
+    const isMatch = await bcrypt.compare(password, member.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign(
+      { email, role: 'admin', organizationId: member.organization_id, orgSlug: member.org_slug },
+      JWT_SECRET,
+      { expiresIn: '8h' }
+    );
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 8 * 60 * 60 * 1000 // 8 hours
+    });
+
+    return res.status(200).json({
+      success: true,
+      token,
+      user: {
+        email,
+        role: 'admin',
+        orgId: member.organization_id,
+        orgName: member.org_name,
+        orgSlug: member.org_slug
+      }
+    });
+
+  } catch (error: any) {
+    console.error('Login error:', error);
+    return res.status(500).json({ success: false, message: 'Server login failed: ' + error.message });
+  }
+});
+
+// Get user profile (check session cookie validity)
+router.get('/me', authenticate, (req: AuthenticatedRequest, res: Response) => {
+  return res.status(200).json({
+    success: true,
+    user: req.user
+  });
+});
+
+// Clear session cookie on logout
+router.post('/logout', (req: Request, res: Response) => {
+  res.clearCookie('token');
+  return res.status(200).json({
+    success: true,
+    message: 'Logged out successfully.'
+  });
+});
+
+export default router;

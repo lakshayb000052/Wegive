@@ -796,7 +796,7 @@ export default function App() {
   const handleSyncRazorpayDetails = async (donationId: string) => {
     try {
       setIsSyncingRazorpay(true);
-      const res = await fetch(`/api/donations/${donationId}/razorpay-sync`);
+      const res = await apiFetch(`/api/donations/${donationId}/razorpay-sync`);
       const data = await res.json();
       if (data.success) {
         fetchData();
@@ -1005,7 +1005,7 @@ export default function App() {
       }
 
       const campUrl = isSuper ? '/api/superadmin/campaigns' : `/api/campaigns?organizationId=${orgId || ''}`;
-      const campRes = await fetch(campUrl);
+      const campRes = await apiFetch(campUrl);
       const campData = await campRes.json();
       if (campData.success) {
         setCampaigns(campData.campaigns);
@@ -1015,7 +1015,7 @@ export default function App() {
       }
 
       const donUrl = isSuper ? '/api/donations' : `/api/donations?organizationId=${orgId || ''}`;
-      const donRes = await fetch(donUrl);
+      const donRes = await apiFetch(donUrl);
       const donData = await donRes.json();
       if (donData.success) setDonations(donData.donations);
 
@@ -1032,7 +1032,7 @@ export default function App() {
     try {
       const url = editingTemplateId ? `/api/templates/${editingTemplateId}` : '/api/templates';
       const method = editingTemplateId ? 'PUT' : 'POST';
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1082,7 +1082,7 @@ export default function App() {
   const handleDeleteTemplate = async (id: string) => {
     if (!confirm('Are you sure you want to delete this custom template?')) return;
     try {
-      const res = await fetch(`/api/templates/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/templates/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (data.success) {
         fetchData();
@@ -1265,7 +1265,7 @@ export default function App() {
     e.preventDefault();
     if (!editingNgoId) return;
     try {
-      const response = await fetch(`/api/superadmin/organizations/${editingNgoId}`, {
+      const response = await apiFetch(`/api/superadmin/organizations/${editingNgoId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1315,7 +1315,7 @@ export default function App() {
   const handleDeleteNGO = async (id: string) => {
     if (!confirm('Are you sure you want to delete this organization?')) return;
     try {
-      await fetch(`/api/superadmin/organizations/${id}`, { method: 'DELETE' });
+      await apiFetch(`/api/superadmin/organizations/${id}`, { method: 'DELETE' });
       fetchData();
     } catch (err: any) {
       alert(err.message);
@@ -1370,7 +1370,7 @@ export default function App() {
     e.preventDefault();
     if (!editingCampId) return;
     try {
-      const response = await fetch(`/api/superadmin/campaigns/${editingCampId}`, {
+      const response = await apiFetch(`/api/superadmin/campaigns/${editingCampId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1401,13 +1401,13 @@ export default function App() {
 
   const handleDeleteCampaign = async (id: string) => {
     if (!confirm('Are you sure?')) return;
-    await fetch(`/api/superadmin/campaigns/${id}`, { method: 'DELETE' });
+    await apiFetch(`/api/superadmin/campaigns/${id}`, { method: 'DELETE' });
     fetchData();
   };
 
   const handleProvisionNgoKey = async (orgId: string) => {
     try {
-      const response = await fetch(`/api/superadmin/organizations/${orgId}/provision-key`, { method: 'POST' });
+      const response = await apiFetch(`/api/superadmin/organizations/${orgId}/provision-key`, { method: 'POST' });
       const data = await response.json();
       if (data.success) {
         alert(`⚡ Managed Razorpay Key Provisioned by DanaPro Admin!\nKey ID: ${data.keyId}`);
@@ -1422,7 +1422,7 @@ export default function App() {
 
   const handleProvisionCampaignKey = async (campId: string) => {
     try {
-      const response = await fetch(`/api/superadmin/campaigns/${campId}/provision-key`, { method: 'POST' });
+      const response = await apiFetch(`/api/superadmin/campaigns/${campId}/provision-key`, { method: 'POST' });
       const data = await response.json();
       if (data.success) {
         alert(`⚡ Campaign Managed Sub-Key Provisioned by DanaPro Admin!\nKey ID: ${data.keyId}`);
@@ -1472,7 +1472,7 @@ export default function App() {
     e.preventDefault();
     if (!editingCampId) return;
     try {
-      const response = await fetch(`/api/campaigns/${editingCampId}`, {
+      const response = await apiFetch(`/api/campaigns/${editingCampId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1496,7 +1496,7 @@ export default function App() {
   const handleDeleteNgoCampaign = async (id: string) => {
     if (!confirm('Are you sure you want to delete this campaign?')) return;
     try {
-      const response = await fetch(`/api/campaigns/${id}`, { method: 'DELETE' });
+      const response = await apiFetch(`/api/campaigns/${id}`, { method: 'DELETE' });
       const data = await response.json();
       if (data.success) {
         fetchData();
@@ -1508,7 +1508,7 @@ export default function App() {
 
   const handleDeleteDonation = async (id: string) => {
     if (!confirm('Remove this donation log?')) return;
-    await fetch(`/api/superadmin/donations/${id}`, { method: 'DELETE' });
+    await apiFetch(`/api/superadmin/donations/${id}`, { method: 'DELETE' });
     fetchData();
   };
 

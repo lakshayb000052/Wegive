@@ -26,9 +26,9 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
 
     let query = 'SELECT id, title, description, slug, is_active FROM campaigns';
     const params: any[] = [];
-    if (targetOrgId) {
+    if (targetOrgId && targetOrgId.trim() !== '') {
       query += ' WHERE organization_id = $1';
-      params.push(targetOrgId);
+      params.push(targetOrgId.trim());
     }
     query += ' ORDER BY created_at DESC';
     const { rows } = await pool.query(query, params);

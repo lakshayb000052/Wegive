@@ -1004,7 +1004,7 @@ export default function App() {
         }
       }
 
-      const campUrl = isSuper ? '/api/superadmin/campaigns' : `/api/campaigns?organizationId=${orgId || ''}`;
+      const campUrl = isSuper ? '/api/superadmin/campaigns' : (orgId ? `/api/campaigns?organizationId=${orgId}` : '/api/campaigns');
       const campRes = await apiFetch(campUrl);
       const campData = await campRes.json();
       if (campData.success) {
@@ -1014,14 +1014,16 @@ export default function App() {
         }
       }
 
-      const donUrl = isSuper ? '/api/donations' : `/api/donations?organizationId=${orgId || ''}`;
-      const donRes = await apiFetch(donUrl);
-      const donData = await donRes.json();
-      if (donData.success) setDonations(donData.donations);
+      if (userSession?.user) {
+        const donUrl = isSuper ? '/api/donations' : `/api/donations?organizationId=${orgId || ''}`;
+        const donRes = await apiFetch(donUrl);
+        const donData = await donRes.json();
+        if (donData.success) setDonations(donData.donations);
 
-      const tmplRes = await apiFetch('/api/templates');
-      const tmplJson = await tmplRes.json();
-      if (tmplJson.success) setTemplatesList(tmplJson.templates);
+        const tmplRes = await apiFetch('/api/templates');
+        const tmplJson = await tmplRes.json();
+        if (tmplJson.success) setTemplatesList(tmplJson.templates);
+      }
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
     }

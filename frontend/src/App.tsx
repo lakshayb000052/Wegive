@@ -4536,7 +4536,7 @@ export default function App() {
                 <pre style={{ backgroundColor: '#0F172A', color: '#38BDF8', padding: '14px', borderRadius: 'var(--radius-md)', fontSize: '0.78rem', overflowX: 'auto', margin: 0, lineHeight: 1.5 }}>
 {`<!-- 1. Include Razorpay & WeGive SDK -->
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-<script src="http://localhost:5000/api/v1/external/embed.js"></script>
+<script src="${getApiBase() || 'https://wegive-backend-mvxa.onrender.com'}/api/v1/external/embed.js"></script>
 
 <!-- 2. Call WeGive.pay() on your Submit/Donate button click -->
 <script>
@@ -4556,6 +4556,10 @@ export default function App() {
       },
       onSuccess: function(res) {
         alert("Payment Completed! 80G Receipt Ref: " + res.receiptNumber);
+      },
+      onError: function(err) {
+        console.error("WeGive Donation Error:", err);
+        alert("Donation Failed: " + (err.error || err.message || "Transaction cancelled"));
       }
     });
   }
@@ -4567,7 +4571,7 @@ export default function App() {
               <div>
                 <h4 style={{ margin: '0 0 8px 0', fontSize: '0.9rem', color: 'var(--primary)' }}>📡 Option 2: REST API Backend Payload (`POST /api/v1/external/donations/initiate`)</h4>
                 <pre style={{ backgroundColor: '#0F172A', color: '#34D399', padding: '14px', borderRadius: 'var(--radius-md)', fontSize: '0.78rem', overflowX: 'auto', margin: 0, lineHeight: 1.5 }}>
-{`POST http://localhost:5000/api/v1/external/donations/initiate
+{`POST ${getApiBase() || 'https://wegive-backend-mvxa.onrender.com'}/api/v1/external/donations/initiate
 Headers:
   x-wegive-api-key: "${selectedCampForEmbedModal.api_key || 'wg_live_' + selectedCampForEmbedModal.slug}"
   Content-Type: application/json

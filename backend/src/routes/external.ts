@@ -713,7 +713,7 @@ router.get('/embed.js', (req: Request, res: Response) => {
           theme: { color: '#059669' },
           modal: {
             ondismiss: function() {
-              fetch((config.serverUrl || 'http://localhost:5000') + '/api/v1/external/donations/fail', {
+              fetch(baseServerUrl + '/api/v1/external/donations/fail', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -721,7 +721,9 @@ router.get('/embed.js', (req: Request, res: Response) => {
                   reason: 'Razorpay payment modal closed by user'
                 })
               });
-              if (typeof config.onFailure === 'function') {
+              if (typeof config.onError === 'function') {
+                config.onError({ donationId: data.donationId, error: 'Razorpay payment modal closed by user' });
+              } else if (typeof config.onFailure === 'function') {
                 config.onFailure({ donationId: data.donationId, reason: 'Razorpay payment modal closed by user' });
               }
             }
@@ -736,7 +738,11 @@ router.get('/embed.js', (req: Request, res: Response) => {
           var rzp = new window.Razorpay(options);
           rzp.on('payment.failed', function(response) {
             console.warn('[Razorpay Notice]: Payment failed or unverified test key.', response);
-            showCustomWeGiveModal();
+            if (typeof config.onError === 'function') {
+              config.onError({ donationId: data.donationId, error: response.error?.description || 'Payment failed' });
+            } else {
+              showCustomWeGiveModal();
+            }
           });
           rzp.open();
         } catch (errRzp) {
@@ -748,8 +754,12 @@ router.get('/embed.js', (req: Request, res: Response) => {
       }
     })
     .catch(function(err) {
-      console.error('[WeGive Embed Error]:', err);
-      alert('WeGive Integration Network Error: ' + err.message);
+      console.error('WeGive Integration Error:', err);
+      if (typeof config.onError === 'function') {
+        config.onError({ error: err.message || 'Failed to connect to WeGive server' });
+      } else {
+        alert('WeGive Integration Error: ' + (err.message || 'Failed to connect to WeGive server'));
+      }
     });
   };
 

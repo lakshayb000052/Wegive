@@ -10,9 +10,9 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
 
-  <!-- 1. Include Razorpay SDK & DanaPro Embed SDK -->
+  <!-- 1. Include Razorpay SDK & WeGive Live Production Embed SDK -->
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-  <script src="http://localhost:5000/api/v1/external/embed.js"></script>
+  <script src="https://wegive-backend-mvxa.onrender.com/api/v1/external/embed.js"></script>
 
   <style>
     :root {
@@ -515,7 +515,7 @@
           <p style="font-size: 0.78rem; color: #94A3B8; margin-bottom: 12px;">Used directly on this page for instant popup checkout & 80G receipt generation.</p>
           <pre style="background: #090D16; color: #A7F3D0; padding: 14px; border-radius: 8px; font-size: 0.78rem; overflow-x: auto; margin: 0; line-height: 1.4;"><code>&lt;!-- 1. Include SDKs in &lt;head&gt; --&gt;
 &lt;script src="https://checkout.razorpay.com/v1/checkout.js"&gt;&lt;/script&gt;
-&lt;script src="http://localhost:5000/api/v1/external/embed.js"&gt;&lt;/script&gt;
+&lt;script src="https://wegive-backend-mvxa.onrender.com/api/v1/external/embed.js"&gt;&lt;/script&gt;
 
 &lt;!-- 2. Trigger WeGive.pay() --&gt;
 &lt;script&gt;
@@ -535,6 +535,9 @@ function handleDonateSubmit() {
     },
     onSuccess: function(res) {
       alert("Payment Completed! 80G Receipt Ref: " + res.receiptNumber);
+    },
+    onError: function(err) {
+      alert("Payment Error: " + (err.error || err.message || "Cancelled"));
     }
   });
 }
@@ -544,7 +547,7 @@ function handleDonateSubmit() {
         <!-- Option 2: REST API Payload -->
         <div style="background: #1E293B; border-radius: 12px; padding: 20px; border: 1px solid #334155;">
           <h4 style="margin: 0 0 8px 0; color: #FBBF24; font-size: 0.95rem;">📡 Option 2: REST API Backend Integration</h4>
-          <p style="font-size: 0.78rem; color: #94A3B8; margin-bottom: 12px;">Endpoint: <code>POST http://localhost:5000/api/v1/external/donations/initiate</code></p>
+          <p style="font-size: 0.78rem; color: #94A3B8; margin-bottom: 12px;">Endpoint: <code>POST https://wegive-backend-mvxa.onrender.com/api/v1/external/donations/initiate</code></p>
           <pre style="background: #090D16; color: #FDE68A; padding: 14px; border-radius: 8px; font-size: 0.78rem; overflow-x: auto; margin: 0; line-height: 1.4;"><code>// Headers:
 // x-wegive-api-key: "wg_live_childfundeducation_946342"
 // Content-Type: application/json

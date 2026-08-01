@@ -309,6 +309,32 @@ function AnalyticsBarChart({ data }: { data: Array<{ ngo_name: string; total_amo
   );
 }
 
+const getApiBase = () => {
+  if ((import.meta as any).env?.VITE_API_URL) return (import.meta as any).env.VITE_API_URL;
+  if (typeof window !== 'undefined' && (window.location.hostname.includes('onrender.com') || window.location.hostname.includes('render.com'))) {
+    const backendHost = window.location.hostname.replace('-frontend-', '-backend-');
+    return `https://${backendHost}`;
+  }
+  return '';
+};
+
+const getWsUrl = () => {
+  if ((import.meta as any).env?.VITE_WS_URL) return (import.meta as any).env.VITE_WS_URL;
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+    const backendHost = window.location.hostname.replace('-frontend-', '-backend-');
+    return `wss://${backendHost}`;
+  }
+  return `ws://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:5000`;
+};
+
+const apiFetch = (path: string, options: RequestInit = {}) => {
+  const url = path.startsWith('http') ? path : `${getApiBase()}${path}`;
+  return fetch(url, {
+    ...options,
+    credentials: 'include'
+  });
+};
+
 export default function App() {
   const [currentPath, setCurrentPath] = useState<string>(window.location.pathname);
   const [redirectPath, setRedirectPath] = useState<string | null>(null);
@@ -346,7 +372,7 @@ export default function App() {
   useEffect(() => {
     const checkSession = async () => {
       try {
-        const res = await fetch('/api/auth/me');
+        const res = await apiFetch('/api/auth/me');
         const data = await res.json();
         if (data.success && data.user) {
           setUserSession({ user: data.user });
@@ -374,7 +400,7 @@ export default function App() {
 
     const connectWebSocket = () => {
       if (isDisposed) return;
-      const wsUrl = `ws://${window.location.hostname}:5000`;
+      const wsUrl = getWsUrl();
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
@@ -588,7 +614,7 @@ export default function App() {
     setCheckoutSuccess(null);
 
     try {
-      const response = await fetch('/api/donations/initiate', {
+      const response = await apiFetch('/api/donations/initiate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -638,7 +664,7 @@ export default function App() {
 
         options.handler = async function (resPayload: any) {
           try {
-            const verifyRes = await fetch('/api/donations/verify', {
+            const verifyRes = await apiFetch('/api/donations/verify', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -679,7 +705,7 @@ export default function App() {
         rzp.on('payment.failed', async function (failedResp: any) {
           console.warn('Razorpay 401/Failed event:', failedResp);
           try {
-            const verifyRes = await fetch('/api/donations/verify', {
+            const verifyRes = await apiFetch('/api/donations/verify', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -728,7 +754,7 @@ export default function App() {
     setIsProcessingCheckout(true);
     setCheckoutSuccess(null);
     try {
-      const response = await fetch('/api/donations/initiate', {
+      const response = await apiFetch('/api/donations/initiate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -937,11 +963,11 @@ export default function App() {
       const orgId = userSession?.user?.orgId;
 
       if (isSuper) {
-        const metricRes = await fetch('/api/superadmin/metrics');
+        const metricRes = await apiFetch('/api/superadmin/metrics');
         const metricData = await metricRes.json();
         if (metricData.success) setGlobalMetrics(metricData.metrics);
 
-        const ngoRes = await fetch('/api/superadmin/organizations');
+        const ngoRes = await apiFetch('/api/superadmin/organizations');
         const ngoData = await ngoRes.json();
         if (ngoData.success) {
           setOrganizations(ngoData.organizations);
@@ -950,15 +976,15 @@ export default function App() {
           }
         }
 
-        const breakdownRes = await fetch('/api/superadmin/breakdown');
+        const breakdownRes = await apiFetch('/api/superadmin/breakdown');
         const breakdownJson = await breakdownRes.json();
         if (breakdownJson.success) setBreakdownData(breakdownJson);
 
-        const analyticsRes = await fetch('/api/superadmin/analytics');
+        const analyticsRes = await apiFetch('/api/superadmin/analytics');
         const analyticsJson = await analyticsRes.json();
         if (analyticsJson.success) setAnalyticsData(analyticsJson.analytics);
 
-        const settingsRes = await fetch('/api/superadmin/settings');
+        const settingsRes = await apiFetch('/api/superadmin/settings');
         const settingsData = await settingsRes.json();
         if (settingsData.success) {
           setSysGeminiKey(settingsData.settings.GEMINI_API_KEY || '');
@@ -993,7 +1019,7 @@ export default function App() {
       const donData = await donRes.json();
       if (donData.success) setDonations(donData.donations);
 
-      const tmplRes = await fetch('/api/templates');
+      const tmplRes = await apiFetch('/api/templates');
       const tmplJson = await tmplRes.json();
       if (tmplJson.success) setTemplatesList(tmplJson.templates);
     } catch (err) {
@@ -1036,7 +1062,7 @@ export default function App() {
 
   const handlePreviewTemplate = async () => {
     try {
-      const res = await fetch('/api/templates/preview', {
+      const res = await apiFetch('/api/templates/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1076,7 +1102,7 @@ export default function App() {
     e.preventDefault();
     setLoginError('');
     try {
-      const response = await fetch('/api/auth/login', {
+      const response = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: loginEmail, password: loginPassword })
@@ -1105,7 +1131,7 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await apiFetch('/api/auth/logout', { method: 'POST' });
     } catch (err) {
       console.error('Logout error:', err);
     }
@@ -1117,7 +1143,7 @@ export default function App() {
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const response = await fetch('/api/superadmin/settings', {
+      const response = await apiFetch('/api/superadmin/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1155,7 +1181,7 @@ export default function App() {
     }
     setIsSendingTestEmail(true);
     try {
-      const res = await fetch('/api/superadmin/settings/test-email', {
+      const res = await apiFetch('/api/superadmin/settings/test-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targetEmail: testEmailRecipient })
@@ -1177,7 +1203,7 @@ export default function App() {
   const handleAddNGO = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const response = await fetch('/api/superadmin/organizations', {
+      const response = await apiFetch('/api/superadmin/organizations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1305,7 +1331,7 @@ export default function App() {
       return;
     }
     try {
-      const response = await fetch('/api/superadmin/campaigns', {
+      const response = await apiFetch('/api/superadmin/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1413,7 +1439,7 @@ export default function App() {
     e.preventDefault();
     if (!userSession?.user?.orgId) return;
     try {
-      const response = await fetch('/api/campaigns', {
+      const response = await apiFetch('/api/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1490,7 +1516,7 @@ export default function App() {
     setIsLoadingCopilot(true);
     setCopilotText('');
     try {
-      const response = await fetch('/api/ai/copilot/thankyou-email', {
+      const response = await apiFetch('/api/ai/copilot/thankyou-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -3,8 +3,12 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:Lakshay%40123@localhost:5432/DanaPro?schema=public';
+const isProduction = process.env.NODE_ENV === 'production' || connectionString.includes('render.com') || connectionString.includes('sslmode=require');
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:Lakshay%40123@localhost:5432/DanaPro?schema=public',
+  connectionString,
+  ssl: isProduction ? { rejectUnauthorized: false } : false
 });
 
 // Verify connection

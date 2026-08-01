@@ -1,7 +1,13 @@
 import { Router, Request, Response } from 'express';
+import bcrypt from 'bcryptjs';
 import pool from '../config/db';
+import { authenticate, authorizeRole, AuthenticatedRequest } from '../middleware/auth';
 
 const router = Router();
+
+// Enforce strict Superadmin authentication guard across all routes
+router.use(authenticate);
+router.use(authorizeRole(['superadmin']));
 
 // 1. Get global stats & metrics for the superadmin dashboard
 router.get('/metrics', async (req: Request, res: Response) => {
@@ -36,12 +42,22 @@ router.get('/metrics', async (req: Request, res: Response) => {
   }
 });
 
-// 2. Get list of all NGOs including WhatsApp Meta, 80G Certificate, Payment Gateways, and Permissions Configs
+// 2. Get list of all NGOs including WhatsApp Meta, 80G Certificate, Payment Gateways, Permissions, and Worker Members
 router.get('/organizations', async (req: Request, res: Response) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, name, slug, tax_id_country, primary_currency, status, whatsapp_meta_config, certificate_80g_config, payment_gateways_config, permissions, created_at 
-       FROM organizations ORDER BY created_at DESC`
+      `SELECT 
+        o.id, o.name, o.slug, o.tax_id_country, o.primary_currency, o.status, o.verified_sender_email,
+        o.whatsapp_meta_config, o.certificate_80g_config, o.payment_gateways_config, o.permissions, o.created_at,
+        COALESCE(
+          JSON_AGG(
+            JSON_BUILD_OBJECT('id', m.id, 'email', m.email, 'role', m.role)
+          ) FILTER (WHERE m.id IS NOT NULL), '[]'
+        ) AS members
+       FROM organizations o
+       LEFT JOIN organization_members m ON m.organization_id = o.id
+       GROUP BY o.id
+       ORDER BY o.created_at DESC`
     );
     return res.status(200).json({
       success: true,
@@ -52,13 +68,32 @@ router.get('/organizations', async (req: Request, res: Response) => {
   }
 });
 
-// 3. CREATE NGO (with permissions and payment gateways config)
+// 3. CREATE NGO (with worker login credentials, permissions, and payment gateways config)
 router.post('/organizations', async (req: Request, res: Response) => {
-  const { name, slug, tax_id_country, primary_currency, status, whatsapp_meta_config, certificate_80g_config, payment_gateways_config, permissions } = req.body;
+  const { 
+    name, 
+    slug, 
+    tax_id_country, 
+    primary_currency, 
+    status, 
+    verified_sender_email,
+    whatsapp_meta_config, 
+    certificate_80g_config, 
+    payment_gateways_config, 
+    permissions,
+    admin_email,
+    admin_password
+  } = req.body;
+
   try {
     if (!name || !slug || !tax_id_country) {
-      return res.status(400).json({ success: false, message: 'Name, Slug, and Tax Country are required.' });
+      return res.status(400).json({ success: false, message: 'NGO Name, Slug, and Tax Country are required.' });
     }
+
+    if (!admin_email || !admin_password) {
+      return res.status(400).json({ success: false, message: 'Worker Email/Username and Access Password are strictly required to create an NGO login.' });
+    }
+
     const defaultPermissions = {
       can_accept_donations: true,
       can_issue_80g_receipts: true,
@@ -68,9 +103,9 @@ router.post('/organizations', async (req: Request, res: Response) => {
     };
 
     const query = `
-      INSERT INTO organizations (name, slug, tax_id_country, primary_currency, status, whatsapp_meta_config, certificate_80g_config, payment_gateways_config, permissions)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      RETURNING id, name, slug, status, whatsapp_meta_config, certificate_80g_config, payment_gateways_config, permissions
+      INSERT INTO organizations (name, slug, tax_id_country, primary_currency, status, verified_sender_email, whatsapp_meta_config, certificate_80g_config, payment_gateways_config, permissions)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING id, name, slug, status, verified_sender_email, whatsapp_meta_config, certificate_80g_config, payment_gateways_config, permissions
     `;
     const { rows } = await pool.query(query, [
       name, 
@@ -78,12 +113,31 @@ router.post('/organizations', async (req: Request, res: Response) => {
       tax_id_country, 
       primary_currency || 'INR',
       status || 'active',
+      verified_sender_email || null,
       JSON.stringify(whatsapp_meta_config || {}),
       JSON.stringify(certificate_80g_config || {}),
       JSON.stringify(payment_gateways_config || {}),
       JSON.stringify(permissions || defaultPermissions)
     ]);
-    return res.status(201).json({ success: true, message: 'NGO created successfully!', organization: rows[0] });
+
+    const createdOrg = rows[0];
+
+    // Create NGO worker login in organization_members
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(admin_password, salt);
+
+    await pool.query(
+      `INSERT INTO organization_members (organization_id, email, password_hash, role)
+       VALUES ($1, $2, $3, 'admin')
+       ON CONFLICT (organization_id, email) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+      [createdOrg.id, admin_email.toLowerCase(), passwordHash]
+    );
+
+    return res.status(201).json({ 
+      success: true, 
+      message: 'NGO profile and worker login credentials created successfully!', 
+      organization: createdOrg 
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -92,13 +146,27 @@ router.post('/organizations', async (req: Request, res: Response) => {
 // 4. UPDATE NGO
 router.put('/organizations/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { name, slug, tax_id_country, primary_currency, status, whatsapp_meta_config, certificate_80g_config, payment_gateways_config, permissions } = req.body;
+  const { 
+    name, 
+    slug, 
+    tax_id_country, 
+    primary_currency, 
+    status, 
+    verified_sender_email,
+    whatsapp_meta_config, 
+    certificate_80g_config, 
+    payment_gateways_config, 
+    permissions,
+    admin_email,
+    admin_password 
+  } = req.body;
+
   try {
     const query = `
       UPDATE organizations 
-      SET name = $1, slug = $2, tax_id_country = $3, primary_currency = $4, status = $5, whatsapp_meta_config = $6, certificate_80g_config = $7, payment_gateways_config = $8, permissions = $9
-      WHERE id = $10
-      RETURNING id, name, slug, status, whatsapp_meta_config, certificate_80g_config, payment_gateways_config, permissions
+      SET name = $1, slug = $2, tax_id_country = $3, primary_currency = $4, status = $5, verified_sender_email = $6, whatsapp_meta_config = $7, certificate_80g_config = $8, payment_gateways_config = $9, permissions = $10
+      WHERE id = $11
+      RETURNING id, name, slug, status, verified_sender_email, whatsapp_meta_config, certificate_80g_config, payment_gateways_config, permissions
     `;
     const { rows } = await pool.query(query, [
       name, 
@@ -106,15 +174,31 @@ router.put('/organizations/:id', async (req: Request, res: Response) => {
       tax_id_country, 
       primary_currency, 
       status, 
+      verified_sender_email || null,
       JSON.stringify(whatsapp_meta_config || {}),
       JSON.stringify(certificate_80g_config || {}),
       JSON.stringify(payment_gateways_config || {}),
       JSON.stringify(permissions || {}),
       id
     ]);
+
     if (rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Organization not found.' });
     }
+
+    // If admin_email and admin_password are provided, update/insert member login
+    if (admin_email && admin_password) {
+      const salt = await bcrypt.genSalt(10);
+      const passwordHash = await bcrypt.hash(admin_password, salt);
+
+      await pool.query(
+        `INSERT INTO organization_members (organization_id, email, password_hash, role)
+         VALUES ($1, $2, $3, 'admin')
+         ON CONFLICT (organization_id, email) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+        [id, admin_email.toLowerCase(), passwordHash]
+      );
+    }
+
     return res.status(200).json({ success: true, message: 'NGO updated successfully!', organization: rows[0] });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
@@ -198,7 +282,7 @@ router.post('/campaigns', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'Specified NGO Organization does not exist in the database. Please create or assign an existing NGO first.' });
     }
 
-    const generatedApiKey = `dp_live_${slug.replace(/[^a-z0-9]/gi, '')}_${Date.now().toString().slice(-6)}`;
+    const generatedApiKey = `wg_live_${slug.replace(/[^a-z0-9]/gi, '')}_${Date.now().toString().slice(-6)}`;
     const query = `
       INSERT INTO campaigns (organization_id, title, description, slug, api_key, landing_page_url, goal_amount, is_active, payment_config, permissions, form_fields)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -226,23 +310,27 @@ router.post('/campaigns', async (req: Request, res: Response) => {
 // 8. UPDATE Campaign globally (including campaign-specific Razorpay keys, landing_page_url & permissions)
 router.put('/campaigns/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { title, description, slug, landing_page_url, is_active, goal_amount, payment_config, permissions } = req.body;
+  const { title, description, slug, landing_page_url, is_active, goal_amount, payment_config, permissions, approval_status } = req.body;
   try {
+    const finalApprovalStatus = approval_status || 'approved';
+    const finalIsActive = is_active !== undefined ? is_active : true;
+
     const query = `
       UPDATE campaigns 
-      SET title = $1, description = $2, slug = $3, landing_page_url = $4, is_active = $5, goal_amount = $6, payment_config = $7, permissions = $8
-      WHERE id = $9
-      RETURNING id, title, slug, api_key, landing_page_url, is_active, goal_amount, payment_config, permissions
+      SET title = $1, description = $2, slug = $3, landing_page_url = $4, is_active = $5, goal_amount = $6, payment_config = $7, permissions = $8, approval_status = $9
+      WHERE id = $10
+      RETURNING id, title, slug, api_key, landing_page_url, is_active, goal_amount, payment_config, permissions, approval_status
     `;
     const { rows } = await pool.query(query, [
       title,
       description,
       slug,
       landing_page_url || null,
-      is_active,
+      finalIsActive,
       goal_amount || 0,
       JSON.stringify(payment_config || {}),
       JSON.stringify(permissions || {}),
+      finalApprovalStatus,
       id
     ]);
     if (rows.length === 0) {
@@ -265,7 +353,7 @@ router.post('/organizations/:id/provision-key', async (req: Request, res: Respon
 
     const org = orgRows[0];
     const generatedKeyId = `rzp_test_${org.slug.replace(/[^a-z0-9]/gi, '').slice(0, 8)}_${Date.now().toString().slice(-6)}`;
-    const generatedKeySecret = `dp_sec_${Math.random().toString(36).slice(2, 12)}`;
+    const generatedKeySecret = `wg_sec_${Math.random().toString(36).slice(2, 12)}`;
 
     const updatedConfig = {
       ...(org.payment_gateways_config || {}),
@@ -299,7 +387,7 @@ router.post('/campaigns/:id/provision-key', async (req: Request, res: Response) 
 
     const camp = campRows[0];
     const generatedKeyId = `rzp_test_${camp.slug.replace(/[^a-z0-9]/gi, '').slice(0, 8)}_${Date.now().toString().slice(-6)}`;
-    const generatedKeySecret = `dp_sec_${Math.random().toString(36).slice(2, 12)}`;
+    const generatedKeySecret = `wg_sec_${Math.random().toString(36).slice(2, 12)}`;
 
     const updatedConfig = {
       ...(camp.payment_config || {}),
@@ -322,19 +410,20 @@ router.post('/campaigns/:id/provision-key', async (req: Request, res: Response) 
   }
 });
 
-// 8B. Money & Payout Breakdown (Full Financial Monitor for Superadmin)
+// 8B. Money Breakdown endpoint
 router.get('/breakdown', async (req: Request, res: Response) => {
   try {
     // Overall money summary
     const overallQuery = `
       SELECT 
-        COALESCE(COUNT(*), 0) AS total_donations,
-        COALESCE(SUM(amount), 0) AS gross_gmv,
-        COALESCE(SUM(COALESCE(fee_covered, 0)), 0) AS total_donor_fee_covered,
-        0.00 AS total_platform_fee,
-        COALESCE(SUM(amount), 0) AS total_ngo_net_payout
-      FROM donations
-      WHERE status IN ('completed', 'pending')
+        COALESCE(COUNT(d.id), 0) AS total_donations,
+        COALESCE(SUM(d.amount), 0) AS gross_gmv,
+        COALESCE(SUM(COALESCE(d.fee_covered, 0)), 0) AS total_donor_fee_covered,
+        COALESCE(SUM(ROUND(d.amount * (COALESCE(CAST(o.permissions->>'platform_fee_percent' AS NUMERIC), 0.0) / 100.0), 2)), 0) AS total_platform_fee,
+        COALESCE(SUM(d.amount - ROUND(d.amount * (COALESCE(CAST(o.permissions->>'platform_fee_percent' AS NUMERIC), 0.0) / 100.0), 2)), 0) AS total_ngo_net_payout
+      FROM donations d
+      LEFT JOIN organizations o ON d.organization_id = o.id
+      WHERE d.status IN ('completed')
     `;
 
     // Breakdown per NGO
@@ -344,17 +433,18 @@ router.get('/breakdown', async (req: Request, res: Response) => {
         o.name AS organization_name,
         o.primary_currency,
         o.status,
+        COALESCE(CAST(o.permissions->>'platform_fee_percent' AS NUMERIC), 0.0) AS fee_rate_percent,
         o.payment_gateways_config->>'razorpay_key_id' AS org_razorpay_key,
         COALESCE(COUNT(DISTINCT c.id), 0) AS campaign_count,
         COALESCE(COUNT(DISTINCT d.id), 0) AS donation_count,
         COALESCE(SUM(d.amount), 0) AS gross_amount,
         COALESCE(SUM(COALESCE(d.fee_covered, 0)), 0) AS fee_covered,
-        0.00 AS platform_fee,
-        COALESCE(SUM(d.amount), 0) AS net_ngo_payout
+        ROUND(COALESCE(SUM(d.amount), 0) * (COALESCE(CAST(o.permissions->>'platform_fee_percent' AS NUMERIC), 0.0) / 100.0), 2) AS platform_fee,
+        ROUND(COALESCE(SUM(d.amount), 0) - (COALESCE(SUM(d.amount), 0) * (COALESCE(CAST(o.permissions->>'platform_fee_percent' AS NUMERIC), 0.0) / 100.0)), 2) AS net_ngo_payout
       FROM organizations o
       LEFT JOIN campaigns c ON c.organization_id = o.id
-      LEFT JOIN donations d ON d.organization_id = o.id AND d.status IN ('completed', 'pending')
-      GROUP BY o.id, o.name, o.primary_currency, o.status, o.payment_gateways_config
+      LEFT JOIN donations d ON d.organization_id = o.id AND d.status IN ('completed')
+      GROUP BY o.id, o.name, o.primary_currency, o.status, o.permissions, o.payment_gateways_config
       ORDER BY gross_amount DESC
     `;
 
@@ -368,15 +458,16 @@ router.get('/breakdown', async (req: Request, res: Response) => {
         c.payment_config->>'razorpay_key_id' AS campaign_razorpay_key,
         o.id AS organization_id,
         o.name AS organization_name,
+        COALESCE(CAST(o.permissions->>'platform_fee_percent' AS NUMERIC), 0.0) AS fee_rate_percent,
         COALESCE(COUNT(d.id), 0) AS donation_count,
         COALESCE(SUM(d.amount), 0) AS gross_amount,
         COALESCE(SUM(COALESCE(d.fee_covered, 0)), 0) AS fee_covered,
-        0.00 AS platform_fee,
-        COALESCE(SUM(d.amount), 0) AS net_ngo_payout
+        ROUND(COALESCE(SUM(d.amount), 0) * (COALESCE(CAST(o.permissions->>'platform_fee_percent' AS NUMERIC), 0.0) / 100.0), 2) AS platform_fee,
+        ROUND(COALESCE(SUM(d.amount), 0) - (COALESCE(SUM(d.amount), 0) * (COALESCE(CAST(o.permissions->>'platform_fee_percent' AS NUMERIC), 0.0) / 100.0)), 2) AS net_ngo_payout
       FROM campaigns c
       JOIN organizations o ON c.organization_id = o.id
-      LEFT JOIN donations d ON d.campaign_id = c.id AND d.status IN ('completed', 'pending')
-      GROUP BY c.id, c.title, c.slug, c.is_active, c.payment_config, o.id, o.name
+      LEFT JOIN donations d ON d.campaign_id = c.id AND d.status IN ('completed')
+      GROUP BY c.id, c.title, c.slug, c.is_active, c.payment_config, o.id, o.name, o.permissions
       ORDER BY gross_amount DESC
     `;
 
@@ -506,7 +597,22 @@ router.get('/settings', async (req: Request, res: Response) => {
 
 // 12. POST/PUT Update System settings
 router.post('/settings', async (req: Request, res: Response) => {
-  const { GEMINI_API_KEY, OPENAI_API_KEY, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET } = req.body;
+  const { 
+    GEMINI_API_KEY, 
+    OPENAI_API_KEY, 
+    RAZORPAY_KEY_ID, 
+    RAZORPAY_KEY_SECRET,
+    RAZORPAY_WEBHOOK_SECRET,
+    AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY,
+    AWS_REGION,
+    AWS_SES_FROM_EMAIL,
+    SMTP_HOST,
+    SMTP_PORT,
+    SMTP_USER,
+    SMTP_PASS,
+    EMAIL_PROVIDER
+  } = req.body;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -514,7 +620,17 @@ router.post('/settings', async (req: Request, res: Response) => {
       client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['GEMINI_API_KEY', GEMINI_API_KEY || '']),
       client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['OPENAI_API_KEY', OPENAI_API_KEY || '']),
       client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['RAZORPAY_KEY_ID', RAZORPAY_KEY_ID || '']),
-      client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['RAZORPAY_KEY_SECRET', RAZORPAY_KEY_SECRET || ''])
+      client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['RAZORPAY_KEY_SECRET', RAZORPAY_KEY_SECRET || '']),
+      client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['RAZORPAY_WEBHOOK_SECRET', RAZORPAY_WEBHOOK_SECRET || '']),
+      client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['AWS_ACCESS_KEY_ID', AWS_ACCESS_KEY_ID || '']),
+      client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['AWS_SECRET_ACCESS_KEY', AWS_SECRET_ACCESS_KEY || '']),
+      client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['AWS_REGION', AWS_REGION || 'ap-south-1']),
+      client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['AWS_SES_FROM_EMAIL', AWS_SES_FROM_EMAIL || '']),
+      client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['SMTP_HOST', SMTP_HOST || 'smtp.gmail.com']),
+      client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['SMTP_PORT', SMTP_PORT || '465']),
+      client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['SMTP_USER', SMTP_USER || '']),
+      client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['SMTP_PASS', SMTP_PASS || '']),
+      client.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['EMAIL_PROVIDER', EMAIL_PROVIDER || 'smtp'])
     ];
     await Promise.all(queries);
     await client.query('COMMIT');
@@ -524,13 +640,46 @@ router.post('/settings', async (req: Request, res: Response) => {
     if (OPENAI_API_KEY) process.env.OPENAI_API_KEY = OPENAI_API_KEY;
     if (RAZORPAY_KEY_ID) process.env.RAZORPAY_KEY_ID = RAZORPAY_KEY_ID;
     if (RAZORPAY_KEY_SECRET) process.env.RAZORPAY_KEY_SECRET = RAZORPAY_KEY_SECRET;
+    if (RAZORPAY_WEBHOOK_SECRET) process.env.RAZORPAY_WEBHOOK_SECRET = RAZORPAY_WEBHOOK_SECRET;
+    if (AWS_ACCESS_KEY_ID) process.env.AWS_ACCESS_KEY_ID = AWS_ACCESS_KEY_ID;
+    if (AWS_SECRET_ACCESS_KEY) process.env.AWS_SECRET_ACCESS_KEY = AWS_SECRET_ACCESS_KEY;
+    if (AWS_REGION) process.env.AWS_REGION = AWS_REGION;
+    if (AWS_SES_FROM_EMAIL) process.env.AWS_SES_FROM_EMAIL = AWS_SES_FROM_EMAIL;
+    if (SMTP_USER) process.env.SMTP_USER = SMTP_USER;
+    if (SMTP_PASS) process.env.SMTP_PASS = SMTP_PASS;
 
-    return res.status(200).json({ success: true, message: 'Platform configurations updated successfully!' });
+    return res.status(200).json({ success: true, message: 'Platform configurations, Razorpay credentials & Email settings updated successfully!' });
   } catch (error: any) {
     await client.query('ROLLBACK');
     return res.status(500).json({ success: false, message: error.message });
   } finally {
     client.release();
+  }
+});
+
+// 13. POST Test Email Dispatch
+import { sendAWSEmailNotification } from '../services/notification';
+router.post('/settings/test-email', async (req: Request, res: Response) => {
+  const { targetEmail } = req.body;
+  if (!targetEmail) {
+    return res.status(400).json({ success: false, message: 'Recipient email address is required.' });
+  }
+  try {
+    await sendAWSEmailNotification(
+      targetEmail,
+      'Test Donor',
+      'System Settings Live Verification',
+      500,
+      'INR',
+      true,
+      `pay_test_cfg_${Date.now()}`,
+      'WeGive Platform',
+      undefined,
+      'ABCDE1234F'
+    );
+    return res.status(200).json({ success: true, message: `Test email & 80G receipt dispatched successfully to ${targetEmail}!` });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: `Email dispatch failed: ${err.message}` });
   }
 });
 

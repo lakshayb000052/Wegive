@@ -85,15 +85,26 @@ router.post('/copilot/thankyou-email', async (req: Request, res: Response) => {
     const openai = new OpenAI({ apiKey: key });
     const prompt = `Write a heartfelt thank-you email to ${donorName || 'a generous donor'} who contributed ${donationAmount || '100'} ${currency || 'USD'} to our campaign: ${campaignName || 'General Funds'}. Suggest a friendly and professional subject line.`;
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4-turbo',
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 250,
-    });
+    let emailText = '';
+    try {
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 250,
+      });
+      emailText = completion.choices[0].message?.content || '';
+    } catch (modelErr) {
+      const fallback = await openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 250,
+      });
+      emailText = fallback.choices[0].message?.content || '';
+    }
 
     return res.status(200).json({
       success: true,
-      emailText: completion.choices[0].message?.content
+      emailText
     });
   } catch (error: any) {
     console.error('OpenAI error:', error);

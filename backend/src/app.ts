@@ -14,6 +14,7 @@ import complianceRoutes from './routes/compliance';
 import aiRoutes from './routes/ai';
 import superadminRoutes from './routes/superadmin';
 import externalRoutes from './routes/external';
+import templatesRoutes from './routes/templates';
 
 const app = express();
 
@@ -21,19 +22,23 @@ import path from 'path';
 
 // Standard Middlewares - allow cross-origin requests from external NGO landing pages
 app.use(cors({
-  origin: true, // Allow external NGO domain origins
+  origin: true, // Allow external NGO domain origins (e.g. http://localhost:8000)
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-danapro-api-key']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-danapro-api-key', 'x-wegive-api-key']
 }));
 app.use(cookieParser());
-app.use(express.json());
+app.use(express.json({
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 
 // Serve generated compliance receipt PDFs statically
 app.use('/receipts', express.static(path.join(__dirname, '../receipts')));
 
 // Base health check
 app.get(['/health', '/api/health'], (req: Request, res: Response) => {
-  res.status(200).json({ status: 'ok', service: 'DanaPro API', timestamp: new Date().toISOString() });
+  res.status(200).json({ status: 'ok', service: 'WeGive API', timestamp: new Date().toISOString() });
 });
 
 // Mounted Routes
@@ -41,9 +46,11 @@ app.use('/api/auth', authRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/donations', donationRoutes);
 app.use('/api/compliance', complianceRoutes);
+app.use('/api/templates', templatesRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/superadmin', superadminRoutes);
 app.use('/api/v1/external', externalRoutes);
+app.use('/api/webhooks/razorpay', externalRoutes);
 
 // 404 Handler for undefined API routes
 app.use('/api/*', (req: Request, res: Response) => {

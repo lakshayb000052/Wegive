@@ -1,17 +1,34 @@
 import { Router, Request, Response } from 'express';
 import pool from '../config/db';
+import { authenticate, AuthenticatedRequest } from '../middleware/auth';
 
 const router = Router();
 
 // Get campaigns for organization from Postgres
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { organizationId } = req.query;
+    let targetOrgId = req.query.organizationId as string | undefined;
+    
+    // Check if token cookie or header exists for NGO user
+    let token = req.cookies?.token;
+    if (!token && req.headers.authorization?.startsWith('Bearer ')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+    if (token) {
+      try {
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'danapro_local_jwt_secret_token_change_in_production');
+        if (decoded.role === 'admin' && decoded.organizationId) {
+          targetOrgId = decoded.organizationId;
+        }
+      } catch (e) {}
+    }
+
     let query = 'SELECT id, title, description, slug, is_active FROM campaigns';
     const params: any[] = [];
-    if (organizationId) {
+    if (targetOrgId) {
       query += ' WHERE organization_id = $1';
-      params.push(organizationId);
+      params.push(targetOrgId);
     }
     query += ' ORDER BY created_at DESC';
     const { rows } = await pool.query(query, params);
@@ -46,16 +63,35 @@ router.get('/public/:slug', async (req: Request, res: Response) => {
   }
 });
 
+import { sendCampaignApprovalNotificationEmail } from '../services/notification';
+
 // Create new campaign
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   const { title, description, slug, formFields, organizationId } = req.body;
   try {
-    const orgId = organizationId || 'f728c312-d961-460d-a3df-6a982f1b0cd9'; // Default WaterAid India Org fallback
+    let orgId = organizationId || 'f728c312-d961-460d-a3df-6a982f1b0cd9';
+    let isPendingApproval = false;
+    let approvalStatus = 'approved';
+    let isActive = true;
+
+    // Enforce multi-tenant isolation and pending approval workflow for NGO workers
+    if (req.user?.role === 'admin') {
+      if (req.user.organizationId) {
+        orgId = req.user.organizationId;
+      }
+      isPendingApproval = true;
+      approvalStatus = 'pending';
+      isActive = false; // Must be verified and activated by Superadmin
+    }
+
+    // Get Organization name for notification email
+    const orgRes = await pool.query('SELECT name FROM organizations WHERE id = $1', [orgId]);
+    const orgName = orgRes.rows[0]?.name || 'NGO Partner';
     
     const query = `
-      INSERT INTO campaigns (organization_id, title, description, slug, form_fields)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, title, slug, is_active
+      INSERT INTO campaigns (organization_id, title, description, slug, form_fields, is_active, approval_status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, title, slug, is_active, approval_status
     `;
     
     const { rows } = await pool.query(query, [
@@ -63,13 +99,30 @@ router.post('/', async (req: Request, res: Response) => {
       title,
       description || '',
       slug,
-      JSON.stringify(formFields || [])
+      JSON.stringify(formFields || []),
+      isActive,
+      approvalStatus
     ]);
+
+    const createdCamp = rows[0];
+
+    if (isPendingApproval) {
+      // Trigger instant email notification to lakshayb057@gmail.com & spikemarketingsolutions@gmail.com
+      sendCampaignApprovalNotificationEmail(title, orgName, slug, createdCamp.id);
+
+      return res.status(201).json({
+        success: true,
+        isPendingApproval: true,
+        message: 'Campaign submitted successfully! Superadmin verification request sent to lakshayb057@gmail.com & spikemarketingsolutions@gmail.com. Superadmin will verify and configure final gateway keys.',
+        campaign: createdCamp
+      });
+    }
 
     return res.status(201).json({
       success: true,
-      message: 'Campaign created successfully!',
-      campaign: rows[0]
+      isPendingApproval: false,
+      message: 'Campaign created and published successfully!',
+      campaign: createdCamp
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

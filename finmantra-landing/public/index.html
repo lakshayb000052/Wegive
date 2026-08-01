@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FinMantra — Empowering Financial Inclusion & Education</title>
+
+  <!-- Google Fonts Outfit & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- 1. Include Razorpay SDK & DanaPro Embed SDK -->
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <script src="http://localhost:5000/api/v1/external/embed.js"></script>
+
+  <style>
+    :root {
+      --primary: #059669;
+      --primary-hover: #047857;
+      --accent: #2563EB;
+      --bg-dark: #0F172A;
+      --card-bg: #FFFFFF;
+      --text-dark: #0F172A;
+      --text-muted: #64748B;
+      --border: #E2E8F0;
+      --radius: 16px;
+      --shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #F8FAFC;
+      color: var(--text-dark);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* Header Navbar */
+    .navbar {
+      background: #FFFFFF;
+      border-bottom: 1px solid var(--border);
+      padding: 16px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+    }
+
+    .brand-logo {
+      width: 42px;
+      height: 42px;
+      background: linear-gradient(135deg, #059669 0%, #10B981 100%);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #FFFFFF;
+      font-weight: 800;
+      font-size: 1.4rem;
+      font-family: 'Outfit', sans-serif;
+    }
+
+    .brand-name {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.4rem;
+      font-weight: 800;
+      color: var(--text-dark);
+      letter-spacing: -0.02em;
+    }
+
+    .brand-tag {
+      font-size: 0.75rem;
+      background: #ECFDF5;
+      color: #047857;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-weight: 600;
+      border: 1px solid #A7F3D0;
+    }
+
+    .tax-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #EFF6FF;
+      border: 1px solid #BFDBFE;
+      color: #1E40AF;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+
+    /* Main Container */
+    .container {
+      max-width: 1140px;
+      margin: 40px auto;
+      padding: 0 24px;
+      display: grid;
+      grid-template-columns: 1fr 480px;
+      gap: 40px;
+      align-items: start;
+    }
+
+    /* Left Hero Content */
+    .hero-content {
+      padding-right: 20px;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #ECFDF5;
+      color: #047857;
+      border: 1px solid #A7F3D0;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 20px;
+    }
+
+    .hero-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 2.8rem;
+      font-weight: 800;
+      line-height: 1.15;
+      color: #0F172A;
+      margin-bottom: 20px;
+      letter-spacing: -0.03em;
+    }
+
+    .hero-title span {
+      background: linear-gradient(135deg, #059669 0%, #2563EB 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-desc {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+      margin-bottom: 30px;
+      line-height: 1.6;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-bottom: 30px;
+    }
+
+    .stat-card {
+      background: #FFFFFF;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+    }
+
+    .stat-num {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.6rem;
+      font-weight: 800;
+      color: var(--primary);
+    }
+
+    .stat-lbl {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+      font-weight: 500;
+    }
+
+    /* Features List */
+    .features-list {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .feature-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 0.95rem;
+      color: #334155;
+    }
+
+    .feature-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: #D1FAE5;
+      color: #059669;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 0.9rem;
+      flex-shrink: 0;
+    }
+
+    /* Right Form Card */
+    .donation-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px;
+      box-shadow: var(--shadow);
+      position: sticky;
+      top: 100px;
+    }
+
+    .card-header {
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    .card-header h3 {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text-dark);
+    }
+
+    .card-header p {
+      font-size: 0.84rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Preset Amount Grid */
+    .preset-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .btn-preset {
+      background: #F1F5F9;
+      border: 1px solid var(--border);
+      padding: 10px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.88rem;
+      color: var(--text-dark);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .btn-preset:hover, .btn-preset.active {
+      background: #ECFDF5;
+      border-color: #059669;
+      color: #059669;
+    }
+
+    /* Form Fields */
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #334155;
+      margin-bottom: 6px;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.92rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s ease;
+      background: #FAFAFA;
+    }
+
+    .form-input:focus {
+      border-color: var(--primary);
+      background: #FFFFFF;
+      box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    /* Submit Button */
+    .btn-donate {
+      width: 100%;
+      background: linear-gradient(135deg, #059669 0%, #047857 100%);
+      color: #FFFFFF;
+      border: none;
+      padding: 16px;
+      border-radius: 10px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      font-family: 'Outfit', sans-serif;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.2s ease;
+      box-shadow: 0 10px 15px -3px rgba(5, 150, 105, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .btn-donate:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 14px 20px -3px rgba(5, 150, 105, 0.4);
+    }
+
+    .btn-donate:active {
+      transform: translateY(0);
+    }
+
+    .secure-note {
+      text-align: center;
+      font-size: 0.76rem;
+      color: var(--text-muted);
+      margin-top: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    @media (max-width: 900px) {
+      .container {
+        grid-template-columns: 1fr;
+      }
+      .donation-card {
+        position: static;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <header class="navbar">
+    <a href="#" class="brand">
+      <div class="brand-logo">FM</div>
+      <div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span class="brand-name">FinMantra</span>
+          <span class="brand-tag">NGO Partner</span>
+        </div>
+      </div>
+    </a>
+    <div class="tax-badge">
+      🛡️ 80G Tax Exemption (50% Benefit)
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="container">
+    
+    <!-- Hero Section -->
+    <section class="hero-content">
+      <div class="hero-badge">
+        ✨ Campaign: FinMantra Financial Empowerment 2026
+      </div>
+      <h1 class="hero-title">
+        Empowering Communities Through <span>Financial Literacy</span> & Growth
+      </h1>
+      <p class="hero-desc">
+        FinMantra Foundation is dedicated to providing financial education, micro-entrepreneurship workshops, and digital literacy tools to underserved families across India. Every contribution creates lasting self-reliance.
+      </p>
+
+      <!-- Stats -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-num">25,000+</div>
+          <div class="stat-lbl">Families Empowered</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num">100%</div>
+          <div class="stat-lbl">Direct Impact</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num">80G</div>
+          <div class="stat-lbl">Tax Tax Benefits</div>
+        </div>
+      </div>
+
+      <!-- Features -->
+      <div class="features-list">
+        <div class="feature-item">
+          <div class="feature-icon">✓</div>
+          <span><strong>Official 80G Tax Receipt:</strong> Instantly generated & mailed to your inbox.</span>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">✓</div>
+          <span><strong>100% Secure Checkout:</strong> Powered by Razorpay & DanaPro Gateway Engine.</span>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">✓</div>
+          <span><strong>Full Transparency:</strong> Complete audits & real-time WhatsApp status notifications.</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Donation Card Form -->
+    <section class="donation-card">
+      <div class="card-header">
+        <h3>Make a Tax-Deductible Contribution</h3>
+        <p>Support FinMantra's Mission & Claim 80G Tax Exemption</p>
+      </div>
+
+      <form id="finmantraForm" onsubmit="event.preventDefault(); handleDonateSubmit();">
+        
+        <!-- Preset Donation Amounts -->
+        <div class="form-group">
+          <label class="form-label">Select Contribution Amount (INR)</label>
+          <div class="preset-grid">
+            <button type="button" class="btn-preset" onclick="setPresetAmount(500)">₹500</button>
+            <button type="button" class="btn-preset active" onclick="setPresetAmount(1000)">₹1,000</button>
+            <button type="button" class="btn-preset" onclick="setPresetAmount(2500)">₹2,500</button>
+            <button type="button" class="btn-preset" onclick="setPresetAmount(5000)">₹5,000</button>
+          </div>
+          <input type="number" id="donation_amount" class="form-input" value="1000" min="10" required placeholder="Enter custom amount in INR" style="font-weight: 700; font-size: 1.1rem; color: #059669;" />
+        </div>
+
+        <!-- Donor Full Name -->
+        <div class="form-group">
+          <label class="form-label">Full Name (As per PAN)</label>
+          <input type="text" id="donor_name" class="form-input" required placeholder="e.g. Lakshay Bansal" />
+        </div>
+
+        <!-- Contact & Email -->
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Phone Number</label>
+            <input type="tel" id="donor_phone" class="form-input" required placeholder="+91 9876543210" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Email Address</label>
+            <input type="email" id="donor_email" class="form-input" required placeholder="name@example.com" />
+          </div>
+        </div>
+
+        <!-- PAN Tax ID & City -->
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">PAN Card No. (For 80G Tax Benefit)</label>
+            <input type="text" id="donor_pan" class="form-input" placeholder="ABCDE1234F" style="text-transform: uppercase;" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">City</label>
+            <input type="text" id="city" class="form-input" placeholder="e.g. New Delhi" />
+          </div>
+        </div>
+
+        <!-- Full Address -->
+        <div class="form-group">
+          <label class="form-label">Address (Optional)</label>
+          <input type="text" id="address" class="form-input" placeholder="Street, Flat No., City, Pincode" />
+        </div>
+
+        <!-- Submit Button -->
+        <button type="submit" class="btn-donate">
+          🔒 Contribute Now & Claim 80G Tax Benefit
+        </button>
+
+        <div class="secure-note">
+          <span>🔒 256-Bit Encrypted Payment &bull; Instant 80G Receipt</span>
+        </div>
+      </form>
+    </section>
+
+  </main>
+
+  <!-- Developer Integration Reference Section -->
+  <footer style="max-width: 1200px; margin: 40px auto; padding: 0 24px 40px 24px;">
+    <div style="background: #0F172A; border-radius: 16px; padding: 32px; color: #F8FAFC; box-shadow: var(--shadow);">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; border-bottom: 1px solid #334155; padding-bottom: 16px;">
+        <div>
+          <h3 style="margin: 0; font-size: 1.2rem; color: #34D399; font-family: 'Outfit', sans-serif;">🔌 WeGive Developer Integration Code (Embedded on this Page)</h3>
+          <p style="margin: 4px 0 0 0; font-size: 0.85rem; color: #94A3B8;">Campaign API Key: <code style="color: #6EE7B7; background: rgba(52,211,153,0.1); padding: 2px 8px; border-radius: 4px;">wg_live_childfundeducation_946342</code> &bull; Campaign Slug: <code>child_fund_education</code></p>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px;">
+        <!-- Option 1: 1-Line JS Embed -->
+        <div style="background: #1E293B; border-radius: 12px; padding: 20px; border: 1px solid #334155;">
+          <h4 style="margin: 0 0 8px 0; color: #60A5FA; font-size: 0.95rem;">⚡ Option 1: 1-Line WeGive JS Embed (HTML Client)</h4>
+          <p style="font-size: 0.78rem; color: #94A3B8; margin-bottom: 12px;">Used directly on this page for instant popup checkout & 80G receipt generation.</p>
+          <pre style="background: #090D16; color: #A7F3D0; padding: 14px; border-radius: 8px; font-size: 0.78rem; overflow-x: auto; margin: 0; line-height: 1.4;"><code>&lt;!-- 1. Include SDKs in &lt;head&gt; --&gt;
+&lt;script src="https://checkout.razorpay.com/v1/checkout.js"&gt;&lt;/script&gt;
+&lt;script src="http://localhost:5000/api/v1/external/embed.js"&gt;&lt;/script&gt;
+
+&lt;!-- 2. Trigger WeGive.pay() --&gt;
+&lt;script&gt;
+function handleDonateSubmit() {
+  WeGive.pay({
+    apiKey: "wg_live_childfundeducation_946342",
+    amount: document.getElementById('donation_amount').value,
+    currency: "INR",
+    name: document.getElementById('donor_name').value,
+    email: document.getElementById('donor_email').value,
+    phone: document.getElementById('donor_phone').value,
+    taxId: document.getElementById('donor_pan').value,
+    customFormData: {
+      address: document.getElementById('address')?.value || '',
+      city: document.getElementById('city')?.value || '',
+      comments: "Submitted from NGO landing page"
+    },
+    onSuccess: function(res) {
+      alert("Payment Completed! 80G Receipt Ref: " + res.receiptNumber);
+    }
+  });
+}
+&lt;/script&gt;</code></pre>
+        </div>
+
+        <!-- Option 2: REST API Payload -->
+        <div style="background: #1E293B; border-radius: 12px; padding: 20px; border: 1px solid #334155;">
+          <h4 style="margin: 0 0 8px 0; color: #FBBF24; font-size: 0.95rem;">📡 Option 2: REST API Backend Integration</h4>
+          <p style="font-size: 0.78rem; color: #94A3B8; margin-bottom: 12px;">Endpoint: <code>POST http://localhost:5000/api/v1/external/donations/initiate</code></p>
+          <pre style="background: #090D16; color: #FDE68A; padding: 14px; border-radius: 8px; font-size: 0.78rem; overflow-x: auto; margin: 0; line-height: 1.4;"><code>// Headers:
+// x-wegive-api-key: "wg_live_childfundeducation_946342"
+// Content-Type: application/json
+
+{
+  "api_key": "wg_live_childfundeducation_946342",
+  "amount": 1000,
+  "currency": "INR",
+  "name": "John Doe",
+  "email": "john@example.com",
+  "phone": "+919876543210",
+  "taxId": "ABCDE1234F",
+  "customFormData": {
+    "address": "123 Marine Drive",
+    "city": "Mumbai",
+    "pincode": "400001",
+    "campaignSlug": "child_fund_education"
+  }
+}</code></pre>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- 2. Call WeGive.pay() on Donate Button Click -->
+  <script>
+    function setPresetAmount(amt) {
+      document.getElementById('donation_amount').value = amt;
+      var presets = document.querySelectorAll('.btn-preset');
+      presets.forEach(function(b) {
+        if (b.textContent === '₹' + amt.toLocaleString('en-IN')) {
+          b.classList.add('active');
+        } else {
+          b.classList.remove('active');
+        }
+      });
+    }
+
+    function handleDonateSubmit() {
+      WeGive.pay({
+        apiKey: "wg_live_childfundeducation_946342",
+        amount: document.getElementById('donation_amount').value,
+        currency: "INR",
+        name: document.getElementById('donor_name').value,
+        email: document.getElementById('donor_email').value,
+        phone: document.getElementById('donor_phone').value,
+        taxId: document.getElementById('donor_pan').value,
+        customFormData: {
+          address: document.getElementById('address')?.value || '',
+          city: document.getElementById('city')?.value || '',
+          comments: "Submitted from NGO landing page"
+        },
+        onSuccess: function(res) {
+          alert("Payment Completed! 80G Receipt Ref: " + res.receiptNumber);
+        }
+      });
+    }
+  </script>
+</body>
+</html>

@@ -60,6 +60,7 @@ router.post('/login', async (req: Request, res: Response) => {
           httpOnly: true,
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
+          path: '/',
           maxAge: 8 * 60 * 60 * 1000 // 8 hours
         });
 
@@ -101,6 +102,7 @@ router.post('/login', async (req: Request, res: Response) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
+      path: '/',
       maxAge: 8 * 60 * 60 * 1000 // 8 hours
     });
 
@@ -111,6 +113,7 @@ router.post('/login', async (req: Request, res: Response) => {
         email,
         role: 'admin',
         orgId: member.organization_id,
+        organizationId: member.organization_id,
         orgName: member.org_name,
         orgSlug: member.org_slug
       }
@@ -123,16 +126,52 @@ router.post('/login', async (req: Request, res: Response) => {
 });
 
 // Get user profile (check session cookie validity)
-router.get('/me', authenticate, (req: AuthenticatedRequest, res: Response) => {
-  return res.status(200).json({
-    success: true,
-    user: req.user
-  });
+router.get('/me', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (req.user) {
+      const role = req.user.role;
+      const email = req.user.email;
+      const targetOrgId = req.user.organizationId || (req.user as any).orgId;
+
+      if (role === 'admin' && targetOrgId) {
+        const orgRes = await pool.query('SELECT name, slug, permissions FROM organizations WHERE id = $1', [targetOrgId]);
+        const orgName = orgRes.rows[0]?.name || 'NGO Partner';
+        const orgSlug = orgRes.rows[0]?.slug || req.user.orgSlug;
+        const permissions = orgRes.rows[0]?.permissions || {};
+
+        return res.status(200).json({
+          success: true,
+          user: {
+            email,
+            role: 'admin',
+            orgId: targetOrgId,
+            organizationId: targetOrgId,
+            orgName,
+            orgSlug,
+            permissions
+          }
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        user: {
+          email,
+          role,
+          orgId: targetOrgId,
+          organizationId: targetOrgId
+        }
+      });
+    }
+    return res.status(401).json({ success: false, message: 'Session token invalid or expired' });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
 });
 
 // Clear session cookie on logout
 router.post('/logout', (req: Request, res: Response) => {
-  res.clearCookie('token');
+  res.clearCookie('token', { path: '/' });
   return res.status(200).json({
     success: true,
     message: 'Logged out successfully.'

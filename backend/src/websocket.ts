@@ -73,3 +73,19 @@ export function broadcast(event: string, data: any, roleFilter?: 'superadmin' | 
     }
   });
 }
+
+export function broadcastDonationEvent(event: string, data: any, targetOrgId?: string) {
+  if (!wss) return;
+
+  const payload = JSON.stringify({ event, data });
+
+  wss.clients.forEach((ws: WebSocket) => {
+    const client = ws as ClientSocket;
+    if (client.readyState === WebSocket.OPEN) {
+      // Send to Superadmin OR to the specific NGO matching targetOrgId
+      if (client.role === 'superadmin' || !targetOrgId || client.organizationId === targetOrgId) {
+        client.send(payload);
+      }
+    }
+  });
+}

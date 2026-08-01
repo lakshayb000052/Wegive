@@ -8,6 +8,7 @@ interface NGO {
   tax_id_country: string;
   primary_currency: string;
   status: string;
+  verified_sender_email?: string;
   whatsapp_meta_config?: any;
   certificate_80g_config?: any;
   payment_gateways_config?: any;
@@ -18,6 +19,7 @@ interface NGO {
     can_run_ai_analytics?: boolean;
     platform_fee_percent?: number;
   };
+  members?: Array<{ id: string; email: string; role: string }>;
   created_at: string;
 }
 
@@ -41,6 +43,7 @@ interface Campaign {
   };
   orgName?: string;
   organization_id?: string;
+  approval_status?: string;
 }
 
 interface Donation {
@@ -89,6 +92,7 @@ interface BreakdownData {
     organization_name: string;
     primary_currency: string;
     status: string;
+    fee_rate_percent?: number;
     org_razorpay_key: string;
     campaign_count: number;
     donation_count: number;
@@ -102,6 +106,7 @@ interface BreakdownData {
     campaign_title: string;
     campaign_slug: string;
     is_active: boolean;
+    fee_rate_percent?: number;
     campaign_razorpay_key: string;
     organization_id: string;
     organization_name: string;
@@ -308,13 +313,18 @@ export default function App() {
   const [currentPath, setCurrentPath] = useState<string>(window.location.pathname);
   const [redirectPath, setRedirectPath] = useState<string | null>(null);
   const [userSession, setUserSession] = useState<any>(null);
-  const [activeSuperadminTab, setActiveSuperadminTab] = useState<'overview' | 'ngos' | 'campaigns' | 'breakdown' | 'transactions' | 'settings'>('overview');
+  const [activeSuperadminTab, setActiveSuperadminTab] = useState<'overview' | 'ngos' | 'campaigns' | 'breakdown' | 'transactions' | 'templates' | 'settings'>('overview');
   const [activeNgoTab, setActiveNgoTab] = useState<'overview' | 'campaigns' | 'transactions' | 'breakdown' | 'compliance'>('overview');
   const [donorSearchQuery, setDonorSearchQuery] = useState<string>('');
   const [sysGeminiKey, setSysGeminiKey] = useState<string>('');
   const [sysOpenaiKey, setSysOpenaiKey] = useState<string>('');
   const [sysRazorpayId, setSysRazorpayId] = useState<string>('');
   const [sysRazorpaySecret, setSysRazorpaySecret] = useState<string>('');
+  const [sysAwsAccessKey, setSysAwsAccessKey] = useState<string>('');
+  const [sysAwsSecretKey, setSysAwsSecretKey] = useState<string>('');
+  const [sysAwsRegion, setSysAwsRegion] = useState<string>('us-east-1');
+  const [sysAwsSenderEmail, setSysAwsSenderEmail] = useState<string>('donations@danapro.org');
+  const [showAwsSecretKey, setShowAwsSecretKey] = useState<boolean>(false);
   const [showLoginPassword, setShowLoginPassword] = useState<boolean>(false);
   const [showRazorpaySecret, setShowRazorpaySecret] = useState<boolean>(false);
   const [showOpenaiKey, setShowOpenaiKey] = useState<boolean>(false);
@@ -381,20 +391,28 @@ export default function App() {
       ws.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          if (message.event === 'donation_completed') {
-            const { amount, currency, donorName, campaignTitle, organizationId } = message.data;
-            
-            // Trigger data reload to sync numbers, tables and charts in real-time
-            fetchData();
+          const eventType = message.event;
+          const data = message.data || {};
 
-            // Display notification toast if organization matches or if user is superadmin
-            const isSuperadmin = userSession?.user?.role === 'superadmin';
-            const isOrgAdmin = userSession?.user?.role === 'admin' && userSession?.user?.orgId === organizationId;
-            
-            if (isSuperadmin || isOrgAdmin) {
-              const formattedAmount = currency === 'INR' ? `₹${Number(amount).toLocaleString()}` : `${currency} ${Number(amount).toLocaleString()}`;
-              showRealtimeNotification(`🎉 Live Donation Received! ${donorName} contributed ${formattedAmount} to "${campaignTitle}"`);
-            }
+          const isSuperadmin = userSession?.user?.role === 'superadmin';
+          const isOrgAdmin = userSession?.user?.role === 'admin' && userSession?.user?.orgId === data.organizationId;
+          const isRelevant = isSuperadmin || isOrgAdmin || !data.organizationId;
+
+          if (eventType === 'donation_initiated' && isRelevant) {
+            const formattedAmount = data.currency === 'INR' ? `₹${Number(data.amount).toLocaleString()}` : `${data.currency} ${Number(data.amount).toLocaleString()}`;
+            showRealtimeNotification(`💳 Payment Initiated: ${data.donorName || 'Donor'} started checkout for ${formattedAmount} on "${data.campaignTitle || 'Campaign'}"`);
+            fetchData();
+          } else if (eventType === 'donation_completed' && isRelevant) {
+            const formattedAmount = data.currency === 'INR' ? `₹${Number(data.amount).toLocaleString()}` : `${data.currency} ${Number(data.amount).toLocaleString()}`;
+            showRealtimeNotification(`🎉 Live Donation Completed! ${data.donorName || 'Donor'} contributed ${formattedAmount} to "${data.campaignTitle || 'Campaign'}" ${data.receiptNumber ? `(Receipt: ${data.receiptNumber})` : ''}`);
+            fetchData();
+          } else if (eventType === 'donation_failed' && isRelevant) {
+            const formattedAmount = data.currency === 'INR' ? `₹${Number(data.amount).toLocaleString()}` : `${data.currency} ${Number(data.amount).toLocaleString()}`;
+            showRealtimeNotification(`⚠️ Payment Failed / Dismissed: ${data.donorName || 'Donor'} (${formattedAmount}) - ${data.reason || 'Modal closed'}`);
+            fetchData();
+          } else if (eventType === 'campaign_updated' && isRelevant) {
+            showRealtimeNotification(`📢 Campaign Updated: ${data.title || 'Campaign details updated'}`);
+            fetchData();
           }
         } catch (err) {
           console.error('[WebSocket] Failed parsing event data:', err);
@@ -782,6 +800,8 @@ export default function App() {
   const [newNgoSlug, setNewNgoSlug] = useState<string>('');
   const [newNgoCountry, setNewNgoCountry] = useState<string>('IN');
   const [newNgoCurrency, setNewNgoCurrency] = useState<string>('INR');
+  const [newNgoVerifiedSender, setNewNgoVerifiedSender] = useState<string>('');
+  const [editNgoVerifiedSender, setEditNgoVerifiedSender] = useState<string>('');
   
   // WABA / WhatsApp Config Input
   const [newWabaId, setNewWabaId] = useState<string>('');
@@ -801,6 +821,10 @@ export default function App() {
   const [newNgoCanExport, setNewNgoCanExport] = useState<boolean>(true);
   const [newNgoCanAi, setNewNgoCanAi] = useState<boolean>(true);
   const [newNgoFeePercent, setNewNgoFeePercent] = useState<number>(0.0);
+
+  // NGO Worker Access Credentials State
+  const [newNgoAdminEmail, setNewNgoAdminEmail] = useState<string>('');
+  const [newNgoAdminPassword, setNewNgoAdminPassword] = useState<string>('');
 
   // Campaign Inputs (With Specific Razorpay Keys & Permissions)
   const [newCampOrgId, setNewCampOrgId] = useState<string>('');
@@ -829,6 +853,8 @@ export default function App() {
   const [edit80gSignatory, setEdit80gSignatory] = useState<string>('');
   const [editNgoRazorpayKeyId, setEditNgoRazorpayKeyId] = useState<string>('');
   const [editNgoRazorpayKeySecret, setEditNgoRazorpayKeySecret] = useState<string>('');
+  const [editNgoAdminEmail, setEditNgoAdminEmail] = useState<string>('');
+  const [editNgoAdminPassword, setEditNgoAdminPassword] = useState<string>('');
 
   // NGO Permissions editing states
   const [editNgoCanAccept, setEditNgoCanAccept] = useState<boolean>(true);
@@ -849,6 +875,29 @@ export default function App() {
   const [editCampTaxEnabled, setEditCampTaxEnabled] = useState<boolean>(true);
   const [selectedCampForEmbedModal, setSelectedCampForEmbedModal] = useState<Campaign | null>(null);
 
+  // System Settings Extended States
+  const [sysRazorpayWebhookSecret, setSysRazorpayWebhookSecret] = useState<string>('');
+  const [showRazorpayWebhookSecret, setShowRazorpayWebhookSecret] = useState<boolean>(false);
+  const [sysSmtpHost, setSysSmtpHost] = useState<string>('smtp.gmail.com');
+  const [sysSmtpPort, setSysSmtpPort] = useState<string>('465');
+  const [sysSmtpUser, setSysSmtpUser] = useState<string>('lakshayb057@gmail.com');
+  const [sysSmtpPass, setSysSmtpPass] = useState<string>('angzefnwaziwmlzz');
+  const [showSmtpPass, setShowSmtpPass] = useState<boolean>(false);
+  const [sysEmailProvider, setSysEmailProvider] = useState<'smtp' | 'aws_ses'>('smtp');
+  const [isSendingTestEmail, setIsSendingTestEmail] = useState<boolean>(false);
+  const [testEmailRecipient, setTestEmailRecipient] = useState<string>('lakshayb057@gmail.com');
+
+  // Template Management States
+  const [templatesList, setTemplatesList] = useState<any[]>([]);
+  const [tmplType, setTmplType] = useState<'80g_receipt' | 'whatsapp_message' | 'email_thankyou'>('80g_receipt');
+  const [tmplTargetOrgId, setTmplTargetOrgId] = useState<string>('default');
+  const [tmplName, setTmplName] = useState<string>('');
+  const [tmplSubject, setTmplSubject] = useState<string>('');
+  const [tmplContent, setTmplContent] = useState<string>('');
+  const [tmplIsDefault, setTmplIsDefault] = useState<boolean>(false);
+  const [tmplPreviewResult, setTmplPreviewResult] = useState<string>('');
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+
   // Prepopulate editing NGO states for NGO admin compliance view
   useEffect(() => {
     if (currentPath === '/ngo' && activeNgoTab === 'compliance' && userSession?.user?.orgId) {
@@ -860,6 +909,7 @@ export default function App() {
         setEditNgoCountry(myNgo.tax_id_country || 'IN');
         setEditNgoCurrency(myNgo.primary_currency || 'INR');
         setEditNgoStatus(myNgo.status || 'active');
+        setEditNgoVerifiedSender(myNgo.verified_sender_email || '');
         const waba = myNgo.whatsapp_meta_config || {};
         const cert = myNgo.certificate_80g_config || {};
         const gateways = myNgo.payment_gateways_config || {};
@@ -883,21 +933,50 @@ export default function App() {
 
   const fetchData = async () => {
     try {
-      const metricRes = await fetch('/api/superadmin/metrics');
-      const metricData = await metricRes.json();
-      if (metricData.success) setGlobalMetrics(metricData.metrics);
-
-      const ngoRes = await fetch('/api/superadmin/organizations');
-      const ngoData = await ngoRes.json();
-      if (ngoData.success) {
-        setOrganizations(ngoData.organizations);
-        if (ngoData.organizations.length > 0 && !newCampOrgId) {
-          setNewCampOrgId(ngoData.organizations[0].id);
-        }
-      }
-
       const isSuper = userSession?.user?.role === 'superadmin';
       const orgId = userSession?.user?.orgId;
+
+      if (isSuper) {
+        const metricRes = await fetch('/api/superadmin/metrics');
+        const metricData = await metricRes.json();
+        if (metricData.success) setGlobalMetrics(metricData.metrics);
+
+        const ngoRes = await fetch('/api/superadmin/organizations');
+        const ngoData = await ngoRes.json();
+        if (ngoData.success) {
+          setOrganizations(ngoData.organizations);
+          if (ngoData.organizations.length > 0 && !newCampOrgId) {
+            setNewCampOrgId(ngoData.organizations[0].id);
+          }
+        }
+
+        const breakdownRes = await fetch('/api/superadmin/breakdown');
+        const breakdownJson = await breakdownRes.json();
+        if (breakdownJson.success) setBreakdownData(breakdownJson);
+
+        const analyticsRes = await fetch('/api/superadmin/analytics');
+        const analyticsJson = await analyticsRes.json();
+        if (analyticsJson.success) setAnalyticsData(analyticsJson.analytics);
+
+        const settingsRes = await fetch('/api/superadmin/settings');
+        const settingsData = await settingsRes.json();
+        if (settingsData.success) {
+          setSysGeminiKey(settingsData.settings.GEMINI_API_KEY || '');
+          setSysOpenaiKey(settingsData.settings.OPENAI_API_KEY || '');
+          setSysRazorpayId(settingsData.settings.RAZORPAY_KEY_ID || '');
+          setSysRazorpaySecret(settingsData.settings.RAZORPAY_KEY_SECRET || '');
+          setSysRazorpayWebhookSecret(settingsData.settings.RAZORPAY_WEBHOOK_SECRET || '');
+          setSysAwsAccessKey(settingsData.settings.AWS_ACCESS_KEY_ID || '');
+          setSysAwsSecretKey(settingsData.settings.AWS_SECRET_ACCESS_KEY || '');
+          setSysAwsRegion(settingsData.settings.AWS_REGION || 'ap-south-1');
+          setSysAwsSenderEmail(settingsData.settings.AWS_SES_FROM_EMAIL || 'lakshayb057@gmail.com');
+          setSysSmtpHost(settingsData.settings.SMTP_HOST || 'smtp.gmail.com');
+          setSysSmtpPort(settingsData.settings.SMTP_PORT || '465');
+          setSysSmtpUser(settingsData.settings.SMTP_USER || 'lakshayb057@gmail.com');
+          setSysSmtpPass(settingsData.settings.SMTP_PASS || 'angzefnwaziwmlzz');
+          setSysEmailProvider((settingsData.settings.EMAIL_PROVIDER as any) || 'smtp');
+        }
+      }
 
       const campUrl = isSuper ? '/api/superadmin/campaigns' : `/api/campaigns?organizationId=${orgId || ''}`;
       const campRes = await fetch(campUrl);
@@ -914,26 +993,78 @@ export default function App() {
       const donData = await donRes.json();
       if (donData.success) setDonations(donData.donations);
 
-      const breakdownRes = await fetch('/api/superadmin/breakdown');
-      const breakdownJson = await breakdownRes.json();
-      if (breakdownJson.success) setBreakdownData(breakdownJson);
-
-      const analyticsRes = await fetch('/api/superadmin/analytics');
-      const analyticsJson = await analyticsRes.json();
-      if (analyticsJson.success) setAnalyticsData(analyticsJson.analytics);
-
-      if (userSession?.user?.role === 'superadmin') {
-        const settingsRes = await fetch('/api/superadmin/settings');
-        const settingsData = await settingsRes.json();
-        if (settingsData.success) {
-          setSysGeminiKey(settingsData.settings.GEMINI_API_KEY || '');
-          setSysOpenaiKey(settingsData.settings.OPENAI_API_KEY || '');
-          setSysRazorpayId(settingsData.settings.RAZORPAY_KEY_ID || '');
-          setSysRazorpaySecret(settingsData.settings.RAZORPAY_KEY_SECRET || '');
-        }
-      }
+      const tmplRes = await fetch('/api/templates');
+      const tmplJson = await tmplRes.json();
+      if (tmplJson.success) setTemplatesList(tmplJson.templates);
     } catch (err) {
-      console.error('Error listing records:', err);
+      console.error('Error fetching dashboard data:', err);
+    }
+  };
+
+  const handleSaveTemplate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const url = editingTemplateId ? `/api/templates/${editingTemplateId}` : '/api/templates';
+      const method = editingTemplateId ? 'PUT' : 'POST';
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: tmplType,
+          name: tmplName,
+          subject: tmplSubject,
+          content: tmplContent,
+          organization_id: tmplTargetOrgId === 'default' ? null : tmplTargetOrgId,
+          is_default: tmplIsDefault
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setEditingTemplateId(null);
+        setTmplName('');
+        setTmplSubject('');
+        setTmplContent('');
+        fetchData();
+        alert(data.message || 'Template saved successfully!');
+      } else {
+        alert(data.message);
+      }
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handlePreviewTemplate = async () => {
+    try {
+      const res = await fetch('/api/templates/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: tmplContent,
+          subject: tmplSubject
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTmplPreviewResult(data.renderedContent);
+      }
+    } catch (err: any) {
+      console.error('Preview error:', err);
+    }
+  };
+
+  const handleDeleteTemplate = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this custom template?')) return;
+    try {
+      const res = await fetch(`/api/templates/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        fetchData();
+      } else {
+        alert(data.message);
+      }
+    } catch (err: any) {
+      alert(err.message);
     }
   };
 
@@ -993,17 +1124,52 @@ export default function App() {
           GEMINI_API_KEY: sysGeminiKey,
           OPENAI_API_KEY: sysOpenaiKey,
           RAZORPAY_KEY_ID: sysRazorpayId,
-          RAZORPAY_KEY_SECRET: sysRazorpaySecret
+          RAZORPAY_KEY_SECRET: sysRazorpaySecret,
+          RAZORPAY_WEBHOOK_SECRET: sysRazorpayWebhookSecret,
+          AWS_ACCESS_KEY_ID: sysAwsAccessKey,
+          AWS_SECRET_ACCESS_KEY: sysAwsSecretKey,
+          AWS_REGION: sysAwsRegion,
+          AWS_SES_FROM_EMAIL: sysAwsSenderEmail,
+          SMTP_HOST: sysSmtpHost,
+          SMTP_PORT: sysSmtpPort,
+          SMTP_USER: sysSmtpUser,
+          SMTP_PASS: sysSmtpPass,
+          EMAIL_PROVIDER: sysEmailProvider
         })
       });
       const data = await response.json();
       if (data.success) {
-        alert('Platform configurations saved successfully!');
+        alert('🎉 Platform configurations, Razorpay secrets, & Email settings saved successfully!');
       } else {
         alert(data.message);
       }
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  const handleTestEmailDispatch = async () => {
+    if (!testEmailRecipient) {
+      alert('Please enter a recipient email address to test.');
+      return;
+    }
+    setIsSendingTestEmail(true);
+    try {
+      const res = await fetch('/api/superadmin/settings/test-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetEmail: testEmailRecipient })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`✅ ${data.message}`);
+      } else {
+        alert(`❌ Email Dispatch Error: ${data.message}`);
+      }
+    } catch (err: any) {
+      alert(`Dispatch error: ${err.message}`);
+    } finally {
+      setIsSendingTestEmail(false);
     }
   };
 
@@ -1019,6 +1185,9 @@ export default function App() {
           slug: newNgoSlug,
           tax_id_country: newNgoCountry,
           primary_currency: newNgoCurrency,
+          verified_sender_email: newNgoVerifiedSender,
+          admin_email: newNgoAdminEmail,
+          admin_password: newNgoAdminPassword,
           whatsapp_meta_config: {
             waba_id: newWabaId,
             phone_id: newPhoneId,
@@ -1046,6 +1215,9 @@ export default function App() {
       if (data.success) {
         setNewNgoName('');
         setNewNgoSlug('');
+        setNewNgoVerifiedSender('');
+        setNewNgoAdminEmail('');
+        setNewNgoAdminPassword('');
         setNewWabaId('');
         setNewPhoneId('');
         setNewWabaToken('');
@@ -1076,6 +1248,9 @@ export default function App() {
           tax_id_country: editNgoCountry,
           primary_currency: editNgoCurrency,
           status: editNgoStatus,
+          verified_sender_email: editNgoVerifiedSender,
+          admin_email: editNgoAdminEmail,
+          admin_password: editNgoAdminPassword,
           whatsapp_meta_config: {
             waba_id: editWabaId,
             phone_id: editPhoneId,
@@ -1102,6 +1277,8 @@ export default function App() {
       const data = await response.json();
       if (data.success) {
         setEditingNgoId(null);
+        setEditNgoAdminEmail('');
+        setEditNgoAdminPassword('');
         fetchData();
       }
     } catch (err: any) {
@@ -1251,7 +1428,14 @@ export default function App() {
         setNewCampTitle('');
         setNewCampSlug('');
         setNewCampDescription('');
+        if (data.isPendingApproval) {
+          alert('🚀 Campaign Submitted for Superadmin Verification!\n\nNotification emails have been dispatched to:\n• lakshayb057@gmail.com\n• spikemarketingsolutions@gmail.com\n\nOnce approved by Superadmin, your campaign will be activated with configured gateway keys and full settings.');
+        } else {
+          alert(data.message || 'Campaign created successfully!');
+        }
         fetchData();
+      } else {
+        alert(data.message || 'Failed to submit campaign.');
       }
     } catch (err: any) {
       alert(err.message);
@@ -1866,6 +2050,12 @@ export default function App() {
                       </a>
                     </li>
                     <li>
+                      <a href="#templates" className={`nav-link ${currentPath === '/superadmin' && activeSuperadminTab === 'templates' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); navigate('/superadmin'); setActiveSuperadminTab('templates'); }}>
+                        <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                        Master Templates
+                      </a>
+                    </li>
+                    <li>
                       <a href="#settings" className={`nav-link ${currentPath === '/superadmin' && activeSuperadminTab === 'settings' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); navigate('/superadmin'); setActiveSuperadminTab('settings'); }}>
                         <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                         Settings
@@ -2006,9 +2196,15 @@ export default function App() {
                                 <td><strong>{camp.title}</strong></td>
                                 <td><code>/{camp.slug}</code></td>
                                 <td>
-                                  <span className={`badge ${camp.is_active ? 'badge-success' : 'badge-failed'}`}>
-                                    {camp.is_active ? 'Active' : 'Inactive'}
-                                  </span>
+                                  {camp.approval_status === 'pending' || (!camp.is_active && camp.approval_status !== 'approved') ? (
+                                    <span className="badge" style={{ background: '#FEF3C7', color: '#92400E', border: '1px solid #FCD34D' }}>
+                                      🟡 Pending Verification
+                                    </span>
+                                  ) : (
+                                    <span className={`badge ${camp.is_active ? 'badge-success' : 'badge-failed'}`}>
+                                      {camp.is_active ? '🟢 Live & Approved' : 'Inactive'}
+                                    </span>
+                                  )}
                                 </td>
                                 <td>
                                   <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
@@ -2074,22 +2270,27 @@ export default function App() {
                         </div>
                       ) : (
                         <div>
-                          <h3 style={{ marginBottom: '16px' }}>Create New Campaign</h3>
+                          <h3 style={{ marginBottom: '12px' }}>Submit New Campaign</h3>
+                          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                            Upon submission, notification emails will be sent to <code>lakshayb057@gmail.com</code> & <code>spikemarketingsolutions@gmail.com</code> for Superadmin verification & final key configuration.
+                          </p>
                           <form onSubmit={handleCreateNgoCampaign} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div className="form-group">
                               <label className="form-label">Campaign Title</label>
-                              <input type="text" className="form-input" value={newCampTitle} onChange={(e) => setNewCampTitle(e.target.value)} required />
+                              <input type="text" className="form-input" value={newCampTitle} onChange={(e) => setNewCampTitle(e.target.value)} required placeholder="e.g. Clean Water Initiative 2026" />
                             </div>
                             <div className="form-group">
                               <label className="form-label">Campaign Slug</label>
-                              <input type="text" className="form-input" value={newCampSlug} onChange={(e) => setNewCampSlug(e.target.value)} required />
+                              <input type="text" className="form-input" value={newCampSlug} onChange={(e) => setNewCampSlug(e.target.value)} required placeholder="e.g. clean-water-2026" />
                             </div>
                             <div className="form-group">
-                              <label className="form-label">Description</label>
-                              <textarea className="form-input" rows={3} style={{ fontFamily: 'inherit' }} value={newCampDescription} onChange={(e) => setNewCampDescription(e.target.value)} />
+                              <label className="form-label">Description & Campaign Details</label>
+                              <textarea className="form-input" rows={3} style={{ fontFamily: 'inherit' }} value={newCampDescription} onChange={(e) => setNewCampDescription(e.target.value)} placeholder="Provide campaign scope and objectives for Superadmin verification..." />
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
-                              <button type="submit" className="btn btn-primary">Create Campaign</button>
+                              <button type="submit" className="btn btn-primary" style={{ padding: '10px 16px' }}>
+                                🚀 Submit for Verification
+                              </button>
                             </div>
                           </form>
                         </div>
@@ -2124,6 +2325,7 @@ export default function App() {
                               <th>Date</th>
                               <th>Donor Name</th>
                               <th>Email</th>
+                              <th>Phone No</th>
                               <th>Campaign</th>
                               <th>Gateway</th>
                               <th>Amount</th>
@@ -2137,7 +2339,8 @@ export default function App() {
                                 const q = donorSearchQuery.toLowerCase();
                                 return (
                                   d.donorName.toLowerCase().includes(q) || 
-                                  d.donorEmail.toLowerCase().includes(q)
+                                  d.donorEmail.toLowerCase().includes(q) ||
+                                  (d.donorPhone && d.donorPhone.includes(q))
                                 );
                               })
                               .map((d) => (
@@ -2145,12 +2348,13 @@ export default function App() {
                                   <td>{new Date(d.created_at || Date.now()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
                                   <td><strong>{d.donorName}</strong></td>
                                   <td>{d.donorEmail}</td>
+                                  <td>{d.donorPhone || 'N/A'}</td>
                                   <td>{d.campaignTitle || 'General Support'}</td>
                                   <td><span style={{ textTransform: 'uppercase' }}>{d.paymentGateway}</span></td>
                                   <td>{d.currency} {Number(d.amount).toLocaleString()}</td>
                                   <td>
-                                    <span className={`badge ${d.status === 'completed' ? 'badge-success' : 'badge-failed'}`}>
-                                      {d.status}
+                                    <span className={`badge ${d.status === 'completed' ? 'badge-success' : d.status === 'pending' || d.status === 'initiated' ? 'badge-warning' : 'badge-failed'}`}>
+                                      {d.status === 'completed' ? '🟢 Completed' : d.status === 'pending' || d.status === 'initiated' ? '🟡 Initiated' : '🔴 Failed'}
                                     </span>
                                   </td>
                                   <td style={{ textAlign: 'right' }}>
@@ -2184,88 +2388,118 @@ export default function App() {
                 )}
 
                          {/* NGO Tab 3B: Money Breakdown */}
-                {activeNgoTab === 'breakdown' && (
-                  <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px', paddingBottom: '16px' }}>
-                    <div className="card" style={{ marginBottom: '24px' }}>
-                      <h3 style={{ marginBottom: '8px', color: 'var(--primary)' }}>💰 NGO Payout & Money Breakdown</h3>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', marginBottom: '20px' }}>
-                        Track gross donations raised across all campaigns, platform service commissions, and net money payouts.
-                      </p>
+                {/* NGO Tab 3B: Money Breakdown */}
+                {activeNgoTab === 'breakdown' && (() => {
+                  const feeRate = userSession?.user?.permissions?.platform_fee_percent !== undefined 
+                    ? Number(userSession.user.permissions.platform_fee_percent) 
+                    : 0.0;
+                  const hasFee = feeRate > 0;
 
-                      <div className="grid grid-cols-3" style={{ marginBottom: '24px' }}>
-                        <div className="card stat-card" style={{ borderLeft: '4px solid var(--primary)', padding: '16px' }}>
-                          <span className="stat-label">Gross Raised Volume</span>
-                          <span className="stat-value" style={{ fontSize: '1.4rem' }}>
-                            ₹{donations.filter(d => d.status === 'completed').reduce((acc, curr) => acc + Number(curr.amount), 0).toLocaleString()}
-                          </span>
+                  const totalGross = donations.filter(d => d.status === 'completed').reduce((acc, curr) => acc + Number(curr.amount), 0);
+                  const totalFee = hasFee ? Math.round(totalGross * (feeRate / 100)) : 0;
+                  const totalNet = totalGross - totalFee;
+
+                  return (
+                    <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px', paddingBottom: '16px' }}>
+                      <div className="card" style={{ marginBottom: '24px' }}>
+                        <h3 style={{ marginBottom: '8px', color: 'var(--primary)' }}>💰 NGO Payout & Money Breakdown</h3>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', marginBottom: '20px' }}>
+                          {hasFee 
+                            ? `Track gross donations raised across all campaigns, platform service commissions (${feeRate}%), and net money payouts.`
+                            : `Track gross donations raised across all campaigns. Zero platform service fee (100% direct net money payout).`}
+                        </p>
+
+                        <div className={`grid ${hasFee ? 'grid-cols-3' : 'grid-cols-2'}`} style={{ marginBottom: '24px' }}>
+                          <div className="card stat-card" style={{ borderLeft: '4px solid var(--primary)', padding: '16px' }}>
+                            <span className="stat-label">Gross Raised Volume</span>
+                            <span className="stat-value" style={{ fontSize: '1.4rem' }}>
+                              ₹{totalGross.toLocaleString()}
+                            </span>
+                          </div>
+
+                          {hasFee && (
+                            <div className="card stat-card" style={{ borderLeft: '4px solid #F59E0B', padding: '16px' }}>
+                              <span className="stat-label">Platform Service Fee ({feeRate}%)</span>
+                              <span className="stat-value" style={{ fontSize: '1.4rem', color: '#F59E0B' }}>
+                                - ₹{totalFee.toLocaleString()}
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="card stat-card" style={{ borderLeft: '4px solid #10B981', padding: '16px' }}>
+                            <span className="stat-label">Net Bank Payout {hasFee ? '' : '(100% Payout)'}</span>
+                            <span className="stat-value" style={{ fontSize: '1.4rem', color: '#10B981' }}>
+                              ₹{totalNet.toLocaleString()}
+                            </span>
+                          </div>
                         </div>
-                        <div className="card stat-card" style={{ borderLeft: '4px solid #F59E0B', padding: '16px' }}>
-                          <span className="stat-label">Platform Service Fee (2%)</span>
-                          <span className="stat-value" style={{ fontSize: '1.4rem', color: '#F59E0B' }}>
-                            - ₹{Math.round(donations.filter(d => d.status === 'completed').reduce((acc, curr) => acc + (Number(curr.amount) * 0.02), 0)).toLocaleString()}
-                          </span>
-                        </div>
-                        <div className="card stat-card" style={{ borderLeft: '4px solid #10B981', padding: '16px' }}>
-                          <span className="stat-label">Net Bank Payout</span>
-                          <span className="stat-value" style={{ fontSize: '1.4rem', color: '#10B981' }}>
-                            ₹{Math.round(donations.filter(d => d.status === 'completed').reduce((acc, curr) => acc + (Number(curr.amount) * 0.98), 0)).toLocaleString()}
-                          </span>
-                        </div>
+
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Campaign</th>
+                              <th>Donors</th>
+                              <th>Gross Raised</th>
+                              {hasFee && <th>Platform Fee ({feeRate}%)</th>}
+                              <th>Net Campaign Payout</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {campaigns.map((c) => {
+                              const cDonations = donations.filter(d => d.campaignTitle === c.title && d.status === 'completed');
+                              const gross = cDonations.reduce((acc, curr) => acc + Number(curr.amount), 0);
+                              const pFee = hasFee ? Math.round(gross * (feeRate / 100)) : 0;
+                              const net = gross - pFee;
+                              return (
+                                <tr key={c.id}>
+                                  <td><strong>{c.title}</strong></td>
+                                  <td>{cDonations.length} donors</td>
+                                  <td>₹{gross.toLocaleString()}</td>
+                                  {hasFee && <td style={{ color: '#F59E0B' }}>- ₹{pFee.toLocaleString()}</td>}
+                                  <td><strong style={{ color: '#059669' }}>₹{net.toLocaleString()}</strong></td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
                       </div>
-
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>Campaign</th>
-                            <th>Donors</th>
-                            <th>Gross Raised</th>
-                            <th>Platform Fee</th>
-                            <th>Net Campaign Payout</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {campaigns.map((c) => {
-                            const cDonations = donations.filter(d => d.campaignTitle === c.title && d.status === 'completed');
-                            const gross = cDonations.reduce((acc, curr) => acc + Number(curr.amount), 0);
-                            const pFee = Math.round(gross * 0.02);
-                            const net = gross - pFee;
-                            return (
-                              <tr key={c.id}>
-                                <td><strong>{c.title}</strong></td>
-                                <td>{cDonations.length} donors</td>
-                                <td>₹{gross.toLocaleString()}</td>
-                                <td style={{ color: '#F59E0B' }}>- ₹{pFee.toLocaleString()}</td>
-                                <td><strong style={{ color: '#059669' }}>₹{net.toLocaleString()}</strong></td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* NGO Tab 4: Compliance Configuration */}
                 {activeNgoTab === 'compliance' && (
                   <div style={{ flex: 1, overflowY: 'auto', paddingBottom: '16px' }}>
-                    <div className="card" style={{ maxWidth: '750px', padding: '32px', margin: '0 auto' }}>
+                    <div className="card" style={{ maxWidth: '800px', padding: '32px', margin: '0 auto' }}>
+                      
+                      {/* Security Read-Only Banner */}
+                      <div style={{ padding: '14px 18px', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span style={{ fontSize: '1.5rem' }}>🔒</span>
+                        <div>
+                          <strong style={{ color: '#166534', fontSize: '0.94rem' }}>Superadmin Configured Credentials (Read-Only Mode for NGO Workers)</strong>
+                          <p style={{ margin: '4px 0 0 0', fontSize: '0.82rem', color: '#15803D' }}>
+                            Organization identity, 80G Statutory URN, WhatsApp Meta API tokens, Razorpay Gateway Keys, and Master Communication Templates are configured strictly by Superadmin at <code>/admin</code>. NGO personnel are granted Read-Only access to review these credentials.
+                          </p>
+                        </div>
+                      </div>
+
                       <h3 style={{ fontSize: '1.25rem', marginBottom: '8px', color: 'var(--primary)' }}>
                         🏢 NGO Compliance Settings & Credentials
                       </h3>
                       <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', fontSize: '0.88rem' }}>
-                        Update organization identity, 80G tax stamp credentials, and Meta WABA tokens.
+                        Review organization identity, 80G tax stamp credentials, and Meta WABA tokens.
                       </p>
 
-                      <form onSubmit={handleUpdateNGO} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                      <form onSubmit={(e) => e.preventDefault()} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                         <div className="form-group">
                           <label className="form-label">NGO Organization Name</label>
-                          <input type="text" className="form-input" value={editNgoName} onChange={(e) => setEditNgoName(e.target.value)} required />
+                          <input type="text" className="form-input" value={editNgoName} readOnly disabled style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }} />
                         </div>
 
                         <div style={{ display: 'flex', gap: '16px' }}>
                           <div className="form-group" style={{ flex: 1 }}>
                             <label className="form-label">Country Jurisdiction</label>
-                            <select className="form-input" value={editNgoCountry} onChange={(e) => setEditNgoCountry(e.target.value)}>
+                            <select className="form-input" value={editNgoCountry} disabled style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }}>
                               <option value="IN">India (IN)</option>
                               <option value="US">United States (US)</option>
                               <option value="GB">United Kingdom (GB)</option>
@@ -2273,7 +2507,7 @@ export default function App() {
                           </div>
                           <div className="form-group" style={{ flex: 1 }}>
                             <label className="form-label">Primary Currency</label>
-                            <select className="form-input" value={editNgoCurrency} onChange={(e) => setEditNgoCurrency(e.target.value)}>
+                            <select className="form-input" value={editNgoCurrency} disabled style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }}>
                               <option value="INR">INR (₹)</option>
                               <option value="USD">USD ($)</option>
                               <option value="GBP">GBP (£)</option>
@@ -2286,15 +2520,15 @@ export default function App() {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div className="form-group">
                               <label className="form-label">WABA ID (WhatsApp Business Account ID)</label>
-                              <input type="text" className="form-input" value={editWabaId} onChange={(e) => setEditWabaId(e.target.value)} placeholder="WABA Account Identifier" />
+                              <input type="text" className="form-input" value={editWabaId} readOnly disabled style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }} placeholder="WABA Account Identifier" />
                             </div>
                             <div className="form-group">
                               <label className="form-label">Phone Number ID</label>
-                              <input type="text" className="form-input" value={editPhoneId} onChange={(e) => setEditPhoneId(e.target.value)} placeholder="Meta WABA phone node ID" />
+                              <input type="text" className="form-input" value={editPhoneId} readOnly disabled style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }} placeholder="Meta WABA phone node ID" />
                             </div>
                             <div className="form-group">
                               <label className="form-label">API Access Token</label>
-                              <input type="text" className="form-input" value={editWabaToken} onChange={(e) => setEditWabaToken(e.target.value)} placeholder="EAAB..." />
+                              <input type="password" autoComplete="current-password" className="form-input" value={editWabaToken ? '••••••••••••••••••••' : ''} readOnly disabled style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }} placeholder="EAAB... (Configured by Superadmin)" />
                             </div>
                           </div>
                         </div>
@@ -2304,15 +2538,15 @@ export default function App() {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div className="form-group">
                               <label className="form-label">Registration URN (Unique Registration Number)</label>
-                              <input type="text" className="form-input" value={edit80gUrn} onChange={(e) => setEdit80gUrn(e.target.value)} placeholder="e.g. AAATD0192K20261" />
+                              <input type="text" className="form-input" value={edit80gUrn} readOnly disabled style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }} placeholder="e.g. AAATD0192K20261" />
                             </div>
                             <div className="form-group">
                               <label className="form-label">URN Approval Date</label>
-                              <input type="date" className="form-input" value={edit80gDate} onChange={(e) => setEdit80gDate(e.target.value)} />
+                              <input type="date" className="form-input" value={edit80gDate} readOnly disabled style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }} />
                             </div>
                             <div className="form-group">
                               <label className="form-label">Digital Signatory Officer name</label>
-                              <input type="text" className="form-input" value={edit80gSignatory} onChange={(e) => setEdit80gSignatory(e.target.value)} placeholder="e.g. Country Director India" />
+                              <input type="text" className="form-input" value={edit80gSignatory} readOnly disabled style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }} placeholder="e.g. Country Director India" />
                             </div>
                           </div>
                         </div>
@@ -2322,19 +2556,113 @@ export default function App() {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div className="form-group">
                               <label className="form-label">Razorpay Key ID</label>
-                              <input type="text" className="form-input" value={editNgoRazorpayKeyId} onChange={(e) => setEditNgoRazorpayKeyId(e.target.value)} placeholder="rzp_test_..." />
+                              <input type="text" className="form-input" value={editNgoRazorpayKeyId || 'System Default (Managed by DanaPro)'} readOnly disabled style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }} />
                             </div>
                             <div className="form-group">
                               <label className="form-label">Razorpay Key Secret</label>
-                              <input type="password" className="form-input" value={editNgoRazorpayKeySecret} onChange={(e) => setEditNgoRazorpayKeySecret(e.target.value)} placeholder="Secret Token" />
+                              <input type="password" autoComplete="current-password" className="form-input" value={editNgoRazorpayKeySecret ? '••••••••••••••••' : 'System Default'} readOnly disabled style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }} />
                             </div>
                           </div>
                         </div>
 
+                        {/* NGO Communication Templates Viewer */}
+                        <div style={{ borderTop: '1px solid var(--border)', paddingTop: '20px', marginTop: '20px' }}>
+                          <h4 style={{ fontSize: '1rem', color: 'var(--primary)', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            📑 Configured 80G Receipt, WhatsApp & Email Templates
+                          </h4>
+                          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                            View active 80G tax receipt HTML code, WhatsApp alerts, and Email notifications configured for your organization. Supported Whitelist Variables: <code>&#123;&#123;donor_name&#125;&#125;</code>, <code>&#123;&#123;donation_amount&#125;&#125;</code>, <code>&#123;&#123;ngo_name&#125;&#125;</code>, <code>&#123;&#123;ngo_urn&#125;&#125;</code>, <code>&#123;&#123;transaction_id&#125;&#125;</code>, <code>&#123;&#123;receipt_url&#125;&#125;</code>.
+                          </p>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            <div className="form-group">
+                              <label className="form-label">Select Template to Inspect</label>
+                              <select 
+                                className="form-input" 
+                                value={tmplType} 
+                                onChange={(e) => {
+                                  const selectedType = e.target.value as any;
+                                  setTmplType(selectedType);
+                                  const existing = templatesList.find(t => t.type === selectedType && (t.organization_id === userSession?.user?.orgId || t.is_default));
+                                  if (existing) {
+                                    setEditingTemplateId(existing.id);
+                                    setTmplName(existing.name);
+                                    setTmplSubject(existing.subject || '');
+                                    setTmplContent(existing.content);
+                                  } else {
+                                    setEditingTemplateId(null);
+                                    setTmplName(`${userSession?.user?.orgName || 'NGO'} Standard ${selectedType}`);
+                                    setTmplContent('');
+                                  }
+                                }}
+                              >
+                                <option value="80g_receipt">📜 80G Tax Exemption Certificate Code (PDF / HTML)</option>
+                                <option value="whatsapp_message">📲 WhatsApp Notification Message Text</option>
+                                <option value="email_thankyou">📧 Email Thank-You Notification Code (HTML)</option>
+                              </select>
+                            </div>
+
+                            <div className="form-group">
+                              <label className="form-label">Active Template Name</label>
+                              <input 
+                                type="text" 
+                                className="form-input" 
+                                value={tmplName} 
+                                readOnly 
+                                disabled 
+                                style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }} 
+                              />
+                            </div>
+
+                            {tmplType === 'email_thankyou' && (
+                              <div className="form-group">
+                                <label className="form-label">Email Subject Line</label>
+                                <input 
+                                  type="text" 
+                                  className="form-input" 
+                                  value={tmplSubject} 
+                                  readOnly 
+                                  disabled 
+                                  style={{ backgroundColor: '#F8FAFC', cursor: 'not-allowed' }} 
+                                />
+                              </div>
+                            )}
+
+                            <div className="form-group">
+                              <label className="form-label">Active Template Content (Read-Only)</label>
+                              <textarea 
+                                rows={8} 
+                                className="form-input" 
+                                style={{ fontFamily: 'monospace', fontSize: '0.84rem', backgroundColor: '#F8FAFC', cursor: 'not-allowed' }} 
+                                value={tmplContent} 
+                                readOnly 
+                                disabled 
+                              />
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '10px' }}>
+                              <button 
+                                type="button" 
+                                onClick={handlePreviewTemplate} 
+                                className="btn btn-secondary"
+                              >
+                                👁️ Test Live Preview Output
+                              </button>
+                            </div>
+
+                            {tmplPreviewResult && (
+                              <div style={{ padding: '14px', background: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: '8px', fontSize: '0.84rem' }}>
+                                <h5 style={{ margin: '0 0 8px 0', color: '#059669', fontSize: '0.9rem' }}>Parsed Live Preview:</h5>
+                                <div dangerouslySetInnerHTML={{ __html: tmplPreviewResult }} />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
                         <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid var(--border)', paddingTop: '20px', marginTop: '8px' }}>
-                          <button type="submit" className="btn btn-primary" style={{ padding: '10px 24px' }}>
-                            Save Configurations
-                          </button>
+                          <span style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            🔒 Security Restricted: Credentials & Templates managed by Superadmin.
+                          </span>
                         </div>
                       </form>
                     </div>
@@ -2496,6 +2824,11 @@ export default function App() {
                                   <div style={{ fontWeight: 600 }}>{org.name}</div>
                                   <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{org.tax_id_country} &bull; {org.primary_currency}</span>
                                   <br/><code style={{ fontSize: '0.75rem' }}>/{org.slug}</code>
+                                  {org.members && org.members.length > 0 && (
+                                    <div style={{ fontSize: '0.76rem', color: '#059669', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      👤 Worker Login: <strong>{org.members[0].email}</strong>
+                                    </div>
+                                  )}
                                 </td>
                                 <td>
                                   <span className={`badge ${isSuspended ? 'badge-failed' : 'badge-success'}`}>
@@ -2519,7 +2852,7 @@ export default function App() {
                                   </div>
                                 </td>
                                 <td>
-                                  <strong style={{ color: 'var(--primary)' }}>{perms.platform_fee_percent || 2.0}%</strong>
+                                  <strong style={{ color: 'var(--primary)' }}>{perms.platform_fee_percent !== undefined ? perms.platform_fee_percent : 0.0}%</strong>
                                 </td>
                                 <td>
                                   <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
@@ -2539,6 +2872,7 @@ export default function App() {
                                         setEditNgoCountry(org.tax_id_country || 'IN');
                                         setEditNgoCurrency(org.primary_currency || 'INR');
                                         setEditNgoStatus(org.status || 'active');
+                                        setEditNgoVerifiedSender(org.verified_sender_email || '');
                                         const waba = org.whatsapp_meta_config || {};
                                         const cert = org.certificate_80g_config || {};
                                         setEditWabaId(waba.waba_id || '');
@@ -2553,7 +2887,7 @@ export default function App() {
                                         setEditNgoCan80g(perms.can_issue_80g_receipts !== false);
                                         setEditNgoCanExport(perms.can_export_data !== false);
                                         setEditNgoCanAi(perms.can_run_ai_analytics !== false);
-                                        setEditNgoFeePercent(perms.platform_fee_percent || 2.0);
+                                        setEditNgoFeePercent(perms.platform_fee_percent !== undefined ? perms.platform_fee_percent : 0.0);
                                       }} 
                                       className="btn btn-secondary" 
                                       style={{ padding: '4px 8px', fontSize: '0.75rem' }}
@@ -2773,7 +3107,9 @@ export default function App() {
                                   <td>{item.campaign_count} campaigns</td>
                                   <td>{item.donation_count} donations</td>
                                   <td>₹{Number(item.gross_amount).toLocaleString()}</td>
-                                  <td style={{ color: '#F59E0B' }}>- ₹{Number(item.platform_fee).toLocaleString()}</td>
+                                  <td style={{ color: '#F59E0B' }}>
+                                    - ₹{Number(item.platform_fee).toLocaleString()} {Number(item.fee_rate_percent || 0) > 0 ? `(${item.fee_rate_percent}%)` : '(0%)'}
+                                  </td>
                                   <td><strong style={{ color: '#059669', fontSize: '0.98rem' }}>₹{Number(item.net_ngo_payout).toLocaleString()}</strong></td>
                                   <td>
                                     {item.org_razorpay_key ? (
@@ -2815,7 +3151,9 @@ export default function App() {
                                   <td>{item.organization_name}</td>
                                   <td>{item.donation_count} donors</td>
                                   <td>₹{Number(item.gross_amount).toLocaleString()}</td>
-                                  <td style={{ color: '#F59E0B' }}>- ₹{Number(item.platform_fee).toLocaleString()}</td>
+                                  <td style={{ color: '#F59E0B' }}>
+                                    - ₹{Number(item.platform_fee).toLocaleString()} {Number(item.fee_rate_percent || 0) > 0 ? `(${item.fee_rate_percent}%)` : '(0%)'}
+                                  </td>
                                   <td><strong style={{ color: '#059669' }}>₹{Number(item.net_ngo_payout).toLocaleString()}</strong></td>
                                   <td>
                                     {item.campaign_razorpay_key ? (
@@ -2857,9 +3195,11 @@ export default function App() {
                           <tr>
                             <th>Donor Name</th>
                             <th>Email Address</th>
+                            <th>Phone No</th>
                             <th>Amount</th>
                             <th>Gateway</th>
                             <th>Method</th>
+                            <th>Status</th>
                             <th style={{ textAlign: 'right' }}>Action</th>
                           </tr>
                         </thead>
@@ -2868,9 +3208,15 @@ export default function App() {
                             <tr key={d.id}>
                               <td><strong>{d.donorName}</strong></td>
                               <td>{d.donorEmail}</td>
+                              <td>{d.donorPhone || 'N/A'}</td>
                               <td>{d.currency} {Number(d.amount).toLocaleString()}</td>
                               <td><span style={{ textTransform: 'uppercase' }}>{d.paymentGateway}</span></td>
-                              <td><span style={{ textTransform: 'uppercase' }}>{d.paymentMethod}</span></td>
+                              <td><span style={{ textTransform: 'uppercase' }}>{d.paymentMethod || 'UPI'}</span></td>
+                              <td>
+                                <span className={`badge ${d.status === 'completed' ? 'badge-success' : d.status === 'pending' || d.status === 'initiated' ? 'badge-warning' : 'badge-failed'}`}>
+                                  {d.status === 'completed' ? '🟢 Completed' : d.status === 'pending' || d.status === 'initiated' ? '🟡 Initiated' : '🔴 Failed'}
+                                </span>
+                              </td>
                               <td>
                                 <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
                                   <button 
@@ -2888,6 +3234,572 @@ export default function App() {
                         </tbody>
                       </table>
                     </div>
+                  </div>
+                )}
+
+                {/* 5. MASTER TEMPLATES SUBTAB */}
+                {activeSuperadminTab === 'templates' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
+                    <div className="page-header" style={{ marginBottom: '20px', flexShrink: 0 }}>
+                      <div>
+                        <h2>Master Communication & 80G Templates</h2>
+                        <p style={{ color: 'var(--text-secondary)' }}>
+                          Create, customize, and assign HTML/text templates for 80G PDF Receipts, WhatsApp Alerts, and Email Notifications with Whitelist Variables.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Whitelist Variables Cheat Sheet Header */}
+                    <div className="card" style={{ marginBottom: '20px', background: '#F8FAFC', border: '1px solid #E2E8F0', padding: '16px 20px' }}>
+                      <h4 style={{ margin: '0 0 8px 0', fontSize: '0.9rem', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        ⚡ Dynamic Whitelist Variables (Supported across 80G, WhatsApp & Email)
+                      </h4>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', fontSize: '0.78rem' }}>
+                        <code style={{ background: '#EFF6FF', color: '#1D4ED8', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;donor_name&#125;&#125;</code>
+                        <code style={{ background: '#EFF6FF', color: '#1D4ED8', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;donor_email&#125;&#125;</code>
+                        <code style={{ background: '#EFF6FF', color: '#1D4ED8', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;donor_phone&#125;&#125;</code>
+                        <code style={{ background: '#EFF6FF', color: '#1D4ED8', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;donor_tax_id&#125;&#125;</code>
+                        <code style={{ background: '#ECFDF5', color: '#047857', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;donation_amount&#125;&#125;</code>
+                        <code style={{ background: '#ECFDF5', color: '#047857', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;donation_currency&#125;&#125;</code>
+                        <code style={{ background: '#ECFDF5', color: '#047857', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;donation_date&#125;&#125;</code>
+                        <code style={{ background: '#ECFDF5', color: '#047857', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;transaction_id&#125;&#125;</code>
+                        <code style={{ background: '#FEF3C7', color: '#B45309', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;campaign_title&#125;&#125;</code>
+                        <code style={{ background: '#FEF3C7', color: '#B45309', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;ngo_name&#125;&#125;</code>
+                        <code style={{ background: '#FEF3C7', color: '#B45309', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;ngo_urn&#125;&#125;</code>
+                        <code style={{ background: '#FEF3C7', color: '#B45309', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;ngo_signatory&#125;&#125;</code>
+                        <code style={{ background: '#F3E8FF', color: '#6B21A8', padding: '3px 6px', borderRadius: '4px' }}>&#123;&#123;receipt_url&#125;&#125;</code>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                      {/* Left: Template Editor Form */}
+                      <div className="card" style={{ padding: '24px' }}>
+                        <h3 style={{ fontSize: '1.05rem', marginBottom: '16px', color: 'var(--primary)' }}>
+                          {editingTemplateId ? '✏️ Edit Template' : '➕ Add Master Template'}
+                        </h3>
+                        <form onSubmit={handleSaveTemplate} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                          <div className="form-group">
+                            <label className="form-label">Template Type / Channel</label>
+                            <select 
+                              className="form-input" 
+                              value={tmplType} 
+                              onChange={(e) => setTmplType(e.target.value as any)}
+                            >
+                              <option value="80g_receipt">📜 80G Tax Exemption Certificate (PDF / HTML)</option>
+                              <option value="whatsapp_message">📲 WhatsApp Notification Message</option>
+                              <option value="email_thankyou">📧 Email Thank-You Notification (HTML)</option>
+                            </select>
+                          </div>
+
+                          <div className="form-group">
+                            <label className="form-label">Assigned NGO / Scope</label>
+                            <select 
+                              className="form-input" 
+                              value={tmplTargetOrgId} 
+                              onChange={(e) => setTmplTargetOrgId(e.target.value)}
+                            >
+                              <option value="default">🌐 Global System Default (Fallback for all NGOs)</option>
+                              {organizations.map(org => (
+                                <option key={org.id} value={org.id}>🏛️ {org.name} ({org.slug})</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="form-group">
+                            <label className="form-label">Template Display Name</label>
+                            <input 
+                              type="text" 
+                              required 
+                              placeholder="e.g. Custom WaterAid 80G Receipt" 
+                              className="form-input" 
+                              value={tmplName} 
+                              onChange={(e) => setTmplName(e.target.value)} 
+                            />
+                          </div>
+
+                          {tmplType === 'email_thankyou' && (
+                            <div className="form-group">
+                              <label className="form-label">Email Subject Line</label>
+                              <input 
+                                type="text" 
+                                placeholder="Thank you for supporting {{ngo_name}}!" 
+                                className="form-input" 
+                                value={tmplSubject} 
+                                onChange={(e) => setTmplSubject(e.target.value)} 
+                              />
+                            </div>
+                          )}
+
+                          <div className="form-group">
+                            <label className="form-label">Template Content / HTML Code</label>
+                            <textarea 
+                              rows={10} 
+                              required 
+                              placeholder="Enter HTML or Message text code containing {{whitelisted_vars}}..." 
+                              className="form-input" 
+                              style={{ fontFamily: 'monospace', fontSize: '0.85rem', lineHeight: '1.4' }}
+                              value={tmplContent} 
+                              onChange={(e) => setTmplContent(e.target.value)} 
+                            />
+                          </div>
+
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', cursor: 'pointer' }}>
+                            <input 
+                              type="checkbox" 
+                              checked={tmplIsDefault} 
+                              onChange={(e) => setTmplIsDefault(e.target.checked)} 
+                            />
+                            Set as Master Default for this Template Type
+                          </label>
+
+                          <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                            <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>
+                              {editingTemplateId ? 'Update Template' : 'Create Template'}
+                            </button>
+                            <button type="button" onClick={handlePreviewTemplate} className="btn btn-secondary">
+                              👁️ Test Live Preview
+                            </button>
+                          </div>
+                        </form>
+
+                        {/* Live Whitelist Rendered Preview Drawer */}
+                        {tmplPreviewResult && (
+                          <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
+                            <h4 style={{ fontSize: '0.88rem', color: '#059669', marginBottom: '8px' }}>
+                              ✅ Live Parsed Whitelist Output
+                            </h4>
+                            <div 
+                              style={{ padding: '12px', background: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: '6px', fontSize: '0.82rem', maxHeight: '200px', overflowY: 'auto' }}
+                              dangerouslySetInnerHTML={{ __html: tmplPreviewResult }}
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Right: Master Templates Directory Table */}
+                      <div className="card" style={{ padding: '24px' }}>
+                        <h3 style={{ fontSize: '1.05rem', marginBottom: '16px', color: 'var(--primary)' }}>
+                          📚 Active Master & NGO Templates
+                        </h3>
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Template Info</th>
+                              <th>Type</th>
+                              <th>Scope</th>
+                              <th style={{ textAlign: 'right' }}>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {templatesList.map((t) => (
+                              <tr key={t.id}>
+                                <td>
+                                  <strong>{t.name}</strong>
+                                  {t.is_default && (
+                                    <span className="badge badge-success" style={{ marginLeft: '6px', fontSize: '0.7rem' }}>Default</span>
+                                  )}
+                                  <br/><span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>By: {t.created_by}</span>
+                                </td>
+                                <td>
+                                  <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>
+                                    {t.type === '80g_receipt' ? '📜 80G PDF' : t.type === 'whatsapp_message' ? '📲 WhatsApp' : '📧 Email'}
+                                  </span>
+                                </td>
+                                <td>
+                                  {t.organization_name ? (
+                                    <span style={{ fontSize: '0.8rem', color: '#2563EB', fontWeight: 600 }}>🏛️ {t.organization_name}</span>
+                                  ) : (
+                                    <span style={{ fontSize: '0.8rem', color: '#059669', fontWeight: 600 }}>🌐 Global Default</span>
+                                  )}
+                                </td>
+                                <td>
+                                  <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                                    <button 
+                                      onClick={() => {
+                                        setEditingTemplateId(t.id);
+                                        setTmplType(t.type);
+                                        setTmplName(t.name);
+                                        setTmplSubject(t.subject || '');
+                                        setTmplContent(t.content);
+                                        setTmplTargetOrgId(t.organization_id || 'default');
+                                        setTmplIsDefault(t.is_default);
+                                      }} 
+                                      className="btn btn-secondary" 
+                                      style={{ padding: '4px 8px', fontSize: '0.75rem' }}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button 
+                                      onClick={() => handleDeleteTemplate(t.id)} 
+                                      className="btn btn-secondary" 
+                                      style={{ padding: '4px 8px', fontSize: '0.75rem', color: 'var(--error)' }}
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                            {templatesList.length === 0 && (
+                              <tr>
+                                <td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-light)', padding: '16px' }}>No custom templates created yet.</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 6. GLOBAL SYSTEM, RAZORPAY & EMAIL CONFIGURATION */}
+                {activeSuperadminTab === 'settings' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
+                    <div className="page-header" style={{ marginBottom: '20px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+                      <div>
+                        <h2 style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          ⚙️ Global Platform Configurations & Credentials
+                        </h2>
+                        <p style={{ color: 'var(--text-secondary)' }}>
+                          Manage Gmail SMTP, AWS SES Email engine credentials, default Razorpay payment gateways, Webhook secrets, and AI Copilot keys.
+                        </p>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span className="badge" style={{ backgroundColor: '#ECFDF5', color: '#047857', border: '1px solid #A7F3D0', padding: '6px 12px', fontSize: '0.78rem', fontWeight: 700 }}>
+                          🟢 System Active
+                        </span>
+                        <span className="badge" style={{ backgroundColor: '#EFF6FF', color: '#1D4ED8', border: '1px solid #BFDBFE', padding: '6px 12px', fontSize: '0.78rem', fontWeight: 700 }}>
+                          📧 Dual Email Engine
+                        </span>
+                      </div>
+                    </div>
+
+                    <form onSubmit={handleSaveSettings} style={{ display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '920px', marginBottom: '40px' }}>
+                      
+                      {/* Email Dispatch Engine & Credentials Card */}
+                      <div className="card" style={{ padding: '28px', borderLeft: '5px solid #F59E0B', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '20px', borderBottom: '1px solid var(--border)', paddingBottom: '16px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem', color: '#FFF' }}>
+                              📧
+                            </div>
+                            <div>
+                              <h3 style={{ margin: 0, fontSize: '1.15rem', color: 'var(--text-dark)', fontWeight: 700 }}>Email Notification Engine Credentials</h3>
+                              <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                                Transmits automated HTML thank-you emails & 80G tax receipt PDF attachments to donors.
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Dispatch Provider Switcher */}
+                          <div style={{ display: 'flex', background: '#F1F5F9', borderRadius: '8px', padding: '4px', border: '1px solid #CBD5E1' }}>
+                            <button
+                              type="button"
+                              onClick={() => setSysEmailProvider('smtp')}
+                              style={{
+                                border: 'none',
+                                padding: '6px 14px',
+                                borderRadius: '6px',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                background: sysEmailProvider === 'smtp' ? '#059669' : 'transparent',
+                                color: sysEmailProvider === 'smtp' ? '#FFF' : '#475569'
+                              }}
+                            >
+                              ⚡ Gmail App Password (SMTP)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSysEmailProvider('aws_ses')}
+                              style={{
+                                border: 'none',
+                                padding: '6px 14px',
+                                borderRadius: '6px',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                background: sysEmailProvider === 'aws_ses' ? '#059669' : 'transparent',
+                                color: sysEmailProvider === 'aws_ses' ? '#FFF' : '#475569'
+                              }}
+                            >
+                              ☁️ AWS SES Service
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Gmail SMTP Fields */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px', marginBottom: '20px' }}>
+                          <div className="form-group">
+                            <label className="form-label" style={{ fontWeight: 600 }}>Gmail SMTP Sender Email / User</label>
+                            <input 
+                              type="email" 
+                              className="form-input" 
+                              value={sysSmtpUser} 
+                              onChange={(e) => setSysSmtpUser(e.target.value)} 
+                              placeholder="lakshayb057@gmail.com"
+                              required 
+                            />
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Your Gmail address used to authenticate SMTP dispatches</span>
+                          </div>
+
+                          <div className="form-group">
+                            <label className="form-label" style={{ fontWeight: 600 }}>Gmail App Password (16 Characters)</label>
+                            <div style={{ position: 'relative' }}>
+                              <input 
+                                type={showSmtpPass ? 'text' : 'password'} 
+                                className="form-input" 
+                                value={sysSmtpPass} 
+                                onChange={(e) => setSysSmtpPass(e.target.value)} 
+                                placeholder="angz efnw aziw mlzz"
+                                autoComplete="off"
+                                required
+                              />
+                              <button 
+                                type="button" 
+                                onClick={() => setShowSmtpPass(!showSmtpPass)} 
+                                style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600, color: '#2563EB' }}
+                              >
+                                {showSmtpPass ? '🙈 Hide' : '👁️ Show'}
+                              </button>
+                            </div>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>App password generated from Google Account Security settings</span>
+                          </div>
+                        </div>
+
+                        {/* AWS SES Credentials Box */}
+                        <div style={{ background: '#F8FAFC', borderRadius: '12px', padding: '18px', border: '1px solid #E2E8F0', marginTop: '12px' }}>
+                          <h4 style={{ margin: '0 0 12px 0', fontSize: '0.88rem', color: '#1E293B', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            ☁️ AWS Simple Email Service (SES) Credentials & Data Region
+                          </h4>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                            <div className="form-group">
+                              <label className="form-label">AWS Region</label>
+                              <input 
+                                type="text" 
+                                className="form-input" 
+                                value={sysAwsRegion} 
+                                onChange={(e) => setSysAwsRegion(e.target.value)} 
+                                placeholder="ap-south-1"
+                                required 
+                              />
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Data center region (ap-south-1 for Mumbai)</span>
+                            </div>
+
+                            <div className="form-group">
+                              <label className="form-label">Verified Sender Email (AWS SES)</label>
+                              <input 
+                                type="email" 
+                                className="form-input" 
+                                value={sysAwsSenderEmail} 
+                                onChange={(e) => setSysAwsSenderEmail(e.target.value)} 
+                                placeholder="lakshayb057@gmail.com"
+                                required 
+                              />
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Must be verified in AWS SES Console</span>
+                            </div>
+
+                            <div className="form-group">
+                              <label className="form-label">AWS Access Key ID</label>
+                              <input 
+                                type="text" 
+                                className="form-input" 
+                                value={sysAwsAccessKey} 
+                                onChange={(e) => setSysAwsAccessKey(e.target.value)} 
+                                placeholder="AKIAIOSFODNN7EXAMPLE"
+                                autoComplete="off"
+                              />
+                            </div>
+
+                            <div className="form-group">
+                              <label className="form-label">AWS Secret Access Key</label>
+                              <div style={{ position: 'relative' }}>
+                                <input 
+                                  type={showAwsSecretKey ? 'text' : 'password'} 
+                                  className="form-input" 
+                                  value={sysAwsSecretKey} 
+                                  onChange={(e) => setSysAwsSecretKey(e.target.value)} 
+                                  placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+                                  autoComplete="off"
+                                />
+                                <button 
+                                  type="button" 
+                                  onClick={() => setShowAwsSecretKey(!showAwsSecretKey)} 
+                                  style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600, color: '#2563EB' }}
+                                >
+                                  {showAwsSecretKey ? '🙈 Hide' : '👁️ Show'}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Live Test Email Dispatch Action */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginTop: '20px', background: '#EFF6FF', padding: '14px 18px', borderRadius: '10px', border: '1px solid #BFDBFE' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: '280px' }}>
+                            <span style={{ fontWeight: 600, fontSize: '0.82rem', color: '#1E40AF', whiteSpace: 'nowrap' }}>Test Recipient:</span>
+                            <input 
+                              type="email" 
+                              className="form-input" 
+                              value={testEmailRecipient} 
+                              onChange={(e) => setTestEmailRecipient(e.target.value)} 
+                              placeholder="lakshayb057@gmail.com"
+                              style={{ height: '36px', fontSize: '0.82rem' }}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleTestEmailDispatch}
+                            disabled={isSendingTestEmail}
+                            className="btn btn-secondary"
+                            style={{ padding: '8px 16px', fontSize: '0.82rem', color: '#2563EB', borderColor: '#2563EB', background: '#FFF', fontWeight: 700 }}
+                          >
+                            {isSendingTestEmail ? 'Sending Test Email...' : '⚡ Send Test Email & 80G PDF'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Razorpay Gateway Keys Card */}
+                      <div className="card" style={{ padding: '28px', borderLeft: '5px solid #10B981', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px', borderBottom: '1px solid var(--border)', paddingBottom: '16px' }}>
+                          <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem', color: '#FFF' }}>
+                            💳
+                          </div>
+                          <div>
+                            <h3 style={{ margin: 0, fontSize: '1.15rem', color: 'var(--text-dark)', fontWeight: 700 }}>Default Razorpay Gateway & Webhooks Configuration</h3>
+                            <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                              System-wide default Razorpay credentials & webhook signature secrets used for INR payment routing.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px', marginBottom: '16px' }}>
+                          <div className="form-group">
+                            <label className="form-label" style={{ fontWeight: 600 }}>System Razorpay Key ID</label>
+                            <input 
+                              type="text" 
+                              className="form-input" 
+                              value={sysRazorpayId} 
+                              onChange={(e) => setSysRazorpayId(e.target.value)} 
+                              placeholder="rzp_test_TIAIr4GaDu23Uq"
+                            />
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Used for domestic INR donation routing checkout overlays</span>
+                          </div>
+
+                          <div className="form-group">
+                            <label className="form-label" style={{ fontWeight: 600 }}>System Razorpay Key Secret</label>
+                            <div style={{ position: 'relative' }}>
+                              <input 
+                                type={showRazorpaySecret ? 'text' : 'password'} 
+                                className="form-input" 
+                                value={sysRazorpaySecret} 
+                                onChange={(e) => setSysRazorpaySecret(e.target.value)} 
+                                placeholder="••••••••••••••••••••••••"
+                                autoComplete="off"
+                              />
+                              <button 
+                                type="button" 
+                                onClick={() => setShowRazorpaySecret(!showRazorpaySecret)} 
+                                style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600, color: '#2563EB' }}
+                              >
+                                {showRazorpaySecret ? '🙈 Hide' : '👁️ Show'}
+                              </button>
+                            </div>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Razorpay secret for order creation & signature verification</span>
+                          </div>
+                        </div>
+
+                        {/* Webhook Secret Signature Verification Field */}
+                        <div className="form-group" style={{ background: '#F8FAFC', padding: '16px', borderRadius: '10px', border: '1px solid #E2E8F0' }}>
+                          <label className="form-label" style={{ fontWeight: 600, color: '#0F172A' }}>Razorpay Webhook Secret (HMAC-SHA256 Hash Verification)</label>
+                          <div style={{ position: 'relative' }}>
+                            <input 
+                              type={showRazorpayWebhookSecret ? 'text' : 'password'} 
+                              className="form-input" 
+                              value={sysRazorpayWebhookSecret} 
+                              onChange={(e) => setSysRazorpayWebhookSecret(e.target.value)} 
+                              placeholder="whsec_8f93a1029e..."
+                              autoComplete="off"
+                            />
+                            <button 
+                              type="button" 
+                              onClick={() => setShowRazorpayWebhookSecret(!showRazorpayWebhookSecret)} 
+                              style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600, color: '#2563EB' }}
+                            >
+                              {showRazorpayWebhookSecret ? '🙈 Hide' : '👁️ Show'}
+                            </button>
+                          </div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'block', marginTop: '6px' }}>
+                            🔒 Verification secret to authenticate webhook hashes securely from Razorpay dashboard (`POST /api/v1/external/webhooks/razorpay`).
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* AI Intelligence Engines Card */}
+                      <div className="card" style={{ padding: '28px', borderLeft: '5px solid #3B82F6', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px', borderBottom: '1px solid var(--border)', paddingBottom: '16px' }}>
+                          <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem', color: '#FFF' }}>
+                            🤖
+                          </div>
+                          <div>
+                            <h3 style={{ margin: 0, fontSize: '1.15rem', color: 'var(--text-dark)', fontWeight: 700 }}>AI Copilot & Analytics Credentials</h3>
+                            <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                              API keys powering automated campaign content optimization, donor sentiment analysis, and 80G receipt template generation.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px' }}>
+                          <div className="form-group">
+                            <label className="form-label" style={{ fontWeight: 600 }}>Google Gemini API Key</label>
+                            <input 
+                              type="password" 
+                              className="form-input" 
+                              value={sysGeminiKey} 
+                              onChange={(e) => setSysGeminiKey(e.target.value)} 
+                              placeholder="AQ.Ab8RN6..."
+                              autoComplete="off"
+                            />
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Powers Gemini 1.5 Pro campaign content generation</span>
+                          </div>
+
+                          <div className="form-group">
+                            <label className="form-label" style={{ fontWeight: 600 }}>OpenAI API Key</label>
+                            <div style={{ position: 'relative' }}>
+                              <input 
+                                type={showOpenaiKey ? 'text' : 'password'} 
+                                className="form-input" 
+                                value={sysOpenaiKey} 
+                                onChange={(e) => setSysOpenaiKey(e.target.value)} 
+                                placeholder="sk-proj-..."
+                                autoComplete="off"
+                              />
+                              <button 
+                                type="button" 
+                                onClick={() => setShowOpenaiKey(!showOpenaiKey)} 
+                                style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600, color: '#2563EB' }}
+                              >
+                                {showOpenaiKey ? '🙈 Hide' : '👁️ Show'}
+                              </button>
+                            </div>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Powers OpenAI GPT-4o donor sentiment analysis</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Sticky Floating Save Button Container */}
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '10px' }}>
+                        <button 
+                          type="submit" 
+                          className="btn btn-primary" 
+                          style={{ padding: '14px 32px', fontSize: '1rem', fontWeight: 700, borderRadius: '12px', boxShadow: '0 10px 20px -5px rgba(5, 150, 105, 0.4)' }}
+                        >
+                          💾 Save All Platform Configurations
+                        </button>
+                      </div>
+                    </form>
                   </div>
                 )}
 
@@ -2932,6 +3844,58 @@ export default function App() {
                             </div>
                           </div>
 
+                          {/* AWS SES Verified Sender Domain Email Alignment */}
+                          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '12px' }}>
+                            <h4 style={{ fontSize: '0.95rem', marginBottom: '6px', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              📧 AWS SES Domain Email Alignment (Multi-Domain Sender)
+                            </h4>
+                            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0 0 10px 0' }}>
+                              Align this NGO with its verified domain email in AWS SES (e.g. <code>donations@finmantra.org</code>, <code>donations@ladlifoundation.org</code>, or <code>donations@wegive.in</code>).
+                            </p>
+                            <input 
+                              type="email" 
+                              placeholder="e.g. donations@finmantra.org" 
+                              className="form-input" 
+                              value={newNgoVerifiedSender} 
+                              onChange={(e) => setNewNgoVerifiedSender(e.target.value)} 
+                            />
+                          </div>
+
+                          {/* NGO Worker Login Credentials */}
+                          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '12px' }}>
+                            <h4 style={{ fontSize: '0.95rem', marginBottom: '6px', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              🔐 NGO Worker Access Credentials
+                            </h4>
+                            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0 0 12px 0' }}>
+                              Assign login credentials so NGO staff can sign in to their NGO Dashboard portal (`/login`).
+                            </p>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                              <div className="form-group" style={{ marginBottom: 0 }}>
+                                <label className="form-label">Worker Email / Username (Required)</label>
+                                <input 
+                                  type="email" 
+                                  required 
+                                  placeholder="e.g. worker@wateraid.org" 
+                                  className="form-input" 
+                                  value={newNgoAdminEmail} 
+                                  onChange={(e) => setNewNgoAdminEmail(e.target.value)} 
+                                />
+                              </div>
+                              <div className="form-group" style={{ marginBottom: 0 }}>
+                                <label className="form-label">Access Password (Required)</label>
+                                <input 
+                                  type="password" 
+                                  autoComplete="new-password"
+                                  required 
+                                  placeholder="Set login password for worker" 
+                                  className="form-input" 
+                                  value={newNgoAdminPassword} 
+                                  onChange={(e) => setNewNgoAdminPassword(e.target.value)} 
+                                />
+                              </div>
+                            </div>
+                          </div>
+
                           {/* Superadmin Permissions Controls */}
                           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '12px' }}>
                             <h4 style={{ fontSize: '0.95rem', marginBottom: '12px', color: 'var(--primary)' }}>⚡ Superadmin Feature & Action Permissions</h4>
@@ -2959,11 +3923,34 @@ export default function App() {
                             </div>
                           </div>
 
+                          {/* WhatsApp Meta API Settings */}
+                          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '12px' }}>
+                            <h4 style={{ fontSize: '0.95rem', marginBottom: '12px', color: 'var(--primary)' }}>💬 WhatsApp Meta API Settings</h4>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                              <input type="text" placeholder="WABA ID (WhatsApp Business Account ID)" className="form-input" value={newWabaId} onChange={(e) => setNewWabaId(e.target.value)} />
+                              <input type="text" placeholder="Phone Number ID" className="form-input" value={newPhoneId} onChange={(e) => setNewPhoneId(e.target.value)} />
+                              <input type="text" placeholder="API Access Token (EAAB...)" className="form-input" value={newWabaToken} onChange={(e) => setNewWabaToken(e.target.value)} />
+                            </div>
+                          </div>
+
+                          {/* 80G Statutory Certificate Details */}
+                          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '12px' }}>
+                            <h4 style={{ fontSize: '0.95rem', marginBottom: '12px', color: 'var(--primary)' }}>🛡️ 80G Statutory Certificate Details</h4>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                              <input type="text" placeholder="Registration URN (e.g. AAATD0192K20261)" className="form-input" value={new80gUrn} onChange={(e) => setNew80gUrn(e.target.value)} />
+                              <div className="form-group" style={{ marginBottom: 0 }}>
+                                <label className="form-label">URN Approval Date</label>
+                                <input type="date" className="form-input" value={new80gDate} onChange={(e) => setNew80gDate(e.target.value)} />
+                              </div>
+                              <input type="text" placeholder="Digital Signatory Officer name (e.g. Country Director India)" className="form-input" value={new80gSignatory} onChange={(e) => setNew80gSignatory(e.target.value)} />
+                            </div>
+                          </div>
+
                           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '12px' }}>
                             <h4 style={{ fontSize: '0.95rem', marginBottom: '12px', color: 'var(--primary)' }}>🔑 NGO-Level Razorpay Gateway Keys</h4>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                               <input type="text" placeholder="Razorpay Key ID (rzp_test_...)" className="form-input" value={newNgoRazorpayKeyId} onChange={(e) => setNewNgoRazorpayKeyId(e.target.value)} />
-                              <input type="password" placeholder="Razorpay Key Secret" className="form-input" value={newNgoRazorpayKeySecret} onChange={(e) => setNewNgoRazorpayKeySecret(e.target.value)} />
+                              <input type="password" autoComplete="new-password" placeholder="Razorpay Key Secret" className="form-input" value={newNgoRazorpayKeySecret} onChange={(e) => setNewNgoRazorpayKeySecret(e.target.value)} />
                             </div>
                           </div>
                         </div>
@@ -3020,6 +4007,56 @@ export default function App() {
                             </select>
                           </div>
 
+                          {/* AWS SES Verified Sender Domain Email Alignment */}
+                          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '12px' }}>
+                            <h4 style={{ fontSize: '0.95rem', marginBottom: '6px', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              📧 AWS SES Domain Email Alignment (Multi-Domain Sender)
+                            </h4>
+                            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0 0 10px 0' }}>
+                              Align this NGO with its verified domain email in AWS SES (e.g. <code>donations@finmantra.org</code>, <code>donations@ladlifoundation.org</code>, or <code>donations@wegive.in</code>).
+                            </p>
+                            <input 
+                              type="email" 
+                              placeholder="e.g. donations@finmantra.org" 
+                              className="form-input" 
+                              value={editNgoVerifiedSender} 
+                              onChange={(e) => setEditNgoVerifiedSender(e.target.value)} 
+                            />
+                          </div>
+
+                          {/* Reset/Update NGO Worker Login Credentials */}
+                          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '12px' }}>
+                            <h4 style={{ fontSize: '0.95rem', marginBottom: '6px', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              🔐 Update NGO Worker Access Credentials
+                            </h4>
+                            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0 0 12px 0' }}>
+                              Optionally assign or reset worker login credentials for this NGO (`/login`).
+                            </p>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                              <div className="form-group" style={{ marginBottom: 0 }}>
+                                <label className="form-label">Worker Email / Username</label>
+                                <input 
+                                  type="email" 
+                                  placeholder="e.g. worker@wateraid.org" 
+                                  className="form-input" 
+                                  value={editNgoAdminEmail} 
+                                  onChange={(e) => setEditNgoAdminEmail(e.target.value)} 
+                                />
+                              </div>
+                              <div className="form-group" style={{ marginBottom: 0 }}>
+                                <label className="form-label">New Password</label>
+                                <input 
+                                  type="password" 
+                                  autoComplete="new-password"
+                                  placeholder="Enter new password to reset worker access" 
+                                  className="form-input" 
+                                  value={editNgoAdminPassword} 
+                                  onChange={(e) => setEditNgoAdminPassword(e.target.value)} 
+                                />
+                              </div>
+                            </div>
+                          </div>
+
                           {/* Superadmin Action Permissions */}
                           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '12px' }}>
                             <h4 style={{ fontSize: '0.95rem', marginBottom: '12px', color: 'var(--primary)' }}>⚡ Superadmin Feature & Action Permissions</h4>
@@ -3047,11 +4084,34 @@ export default function App() {
                             </div>
                           </div>
 
+                          {/* WhatsApp Meta API Settings */}
+                          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '12px' }}>
+                            <h4 style={{ fontSize: '0.95rem', marginBottom: '12px', color: 'var(--primary)' }}>💬 WhatsApp Meta API Settings</h4>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                              <input type="text" placeholder="WABA ID (WhatsApp Business Account ID)" className="form-input" value={editWabaId} onChange={(e) => setEditWabaId(e.target.value)} />
+                              <input type="text" placeholder="Phone Number ID" className="form-input" value={editPhoneId} onChange={(e) => setEditPhoneId(e.target.value)} />
+                              <input type="password" autoComplete="off" placeholder="API Access Token (EAAB...)" className="form-input" value={editWabaToken} onChange={(e) => setEditWabaToken(e.target.value)} />
+                            </div>
+                          </div>
+
+                          {/* 80G Statutory Certificate Details */}
+                          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '12px' }}>
+                            <h4 style={{ fontSize: '0.95rem', marginBottom: '12px', color: 'var(--primary)' }}>🛡️ 80G Statutory Certificate Details</h4>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                              <input type="text" placeholder="Registration URN (e.g. AAATD0192K20261)" className="form-input" value={edit80gUrn} onChange={(e) => setEdit80gUrn(e.target.value)} />
+                              <div className="form-group" style={{ marginBottom: 0 }}>
+                                <label className="form-label">URN Approval Date</label>
+                                <input type="date" className="form-input" value={edit80gDate} onChange={(e) => setEdit80gDate(e.target.value)} />
+                              </div>
+                              <input type="text" placeholder="Digital Signatory Officer name (e.g. Country Director India)" className="form-input" value={edit80gSignatory} onChange={(e) => setEdit80gSignatory(e.target.value)} />
+                            </div>
+                          </div>
+
                           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '12px' }}>
                             <h4 style={{ fontSize: '0.95rem', marginBottom: '12px', color: 'var(--primary)' }}>🔑 NGO-Level Razorpay Gateway Keys</h4>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                               <input type="text" placeholder="Razorpay Key ID" className="form-input" value={editNgoRazorpayKeyId} onChange={(e) => setEditNgoRazorpayKeyId(e.target.value)} />
-                              <input type="password" placeholder="Razorpay Key Secret" className="form-input" value={editNgoRazorpayKeySecret} onChange={(e) => setEditNgoRazorpayKeySecret(e.target.value)} />
+                              <input type="password" autoComplete="off" placeholder="Razorpay Key Secret" className="form-input" value={editNgoRazorpayKeySecret} onChange={(e) => setEditNgoRazorpayKeySecret(e.target.value)} />
                             </div>
                           </div>
                         </div>
@@ -3141,7 +4201,7 @@ export default function App() {
                             </p>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                               <input type="text" placeholder="Campaign Razorpay Key ID (rzp_test_...)" className="form-input" value={newCampRazorpayKeyId} onChange={(e) => setNewCampRazorpayKeyId(e.target.value)} />
-                              <input type="password" placeholder="Campaign Razorpay Key Secret" className="form-input" value={newCampRazorpayKeySecret} onChange={(e) => setNewCampRazorpayKeySecret(e.target.value)} />
+                              <input type="password" autoComplete="off" placeholder="Campaign Razorpay Key Secret" className="form-input" value={newCampRazorpayKeySecret} onChange={(e) => setNewCampRazorpayKeySecret(e.target.value)} />
                             </div>
                           </div>
                         </div>
@@ -3209,7 +4269,7 @@ export default function App() {
                             </p>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                               <input type="text" placeholder="Campaign Razorpay Key ID" className="form-input" value={editCampRazorpayKeyId} onChange={(e) => setEditCampRazorpayKeyId(e.target.value)} />
-                              <input type="password" placeholder="Campaign Razorpay Key Secret" className="form-input" value={editCampRazorpayKeySecret} onChange={(e) => setEditCampRazorpayKeySecret(e.target.value)} />
+                              <input type="password" autoComplete="off" placeholder="Campaign Razorpay Key Secret" className="form-input" value={editCampRazorpayKeySecret} onChange={(e) => setEditCampRazorpayKeySecret(e.target.value)} />
                             </div>
                           </div>
                         </div>
@@ -3222,110 +4282,7 @@ export default function App() {
                   </div>
                 )}
 
-                {/* 5. SYSTEM SETTINGS SUBTAB */}
-                {activeSuperadminTab === 'settings' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
-                    <div className="page-header" style={{ marginBottom: '20px', flexShrink: 0 }}>
-                      <div>
-                        <h2>System settings & Integrations</h2>
-                        <p style={{ color: 'var(--text-secondary)' }}>Configure global payment gateways and AI engine credentials.</p>
-                      </div>
-                    </div>
 
-                    <div className="card" style={{ maxWidth: '650px', padding: '32px' }}>
-                      <form onSubmit={handleSaveSettings} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                        
-                        <div>
-                          <h3 style={{ fontSize: '1.1rem', marginBottom: '16px', color: 'var(--primary)', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
-                            💳 Razorpay Gateways Configuration
-                          </h3>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            <div className="form-group">
-                              <label className="form-label">Razorpay Key ID</label>
-                              <input 
-                                type="text" 
-                                placeholder="key_test_..." 
-                                className="form-input" 
-                                style={{ width: '100%' }}
-                                value={sysRazorpayId} 
-                                onChange={(e) => setSysRazorpayId(e.target.value)} 
-                              />
-                              <span style={{ fontSize: '0.75rem', color: 'var(--text-light)', marginTop: '4px' }}>Used for domestic INR donation routing checkout overlays.</span>
-                            </div>
-                            <div className="form-group">
-                              <label className="form-label">Razorpay Key Secret</label>
-                              <div style={{ position: 'relative' }}>
-                                <input 
-                                  type={showRazorpaySecret ? "text" : "password"} 
-                                  placeholder="••••••••••••••••" 
-                                  className="form-input" 
-                                  value={sysRazorpaySecret} 
-                                  onChange={(e) => setSysRazorpaySecret(e.target.value)} 
-                                  style={{ width: '100%', paddingRight: '40px' }}
-                                />
-                                <button 
-                                  type="button" 
-                                  onClick={() => setShowRazorpaySecret(!showRazorpaySecret)} 
-                                  style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'none', cursor: 'pointer', fontSize: '1.1rem', padding: 0, outline: 'none' }}
-                                >
-                                  {showRazorpaySecret ? '👁️' : '🙈'}
-                                </button>
-                              </div>
-                              <span style={{ fontSize: '0.75rem', color: 'var(--text-light)', marginTop: '4px' }}>Verification secret to authenticate webhook hashes securely.</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div>
-                          <h3 style={{ fontSize: '1.1rem', marginBottom: '16px', color: 'var(--primary)', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
-                            🤖 AI Models API Keys
-                          </h3>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            <div className="form-group">
-                              <label className="form-label">Gemini API Key</label>
-                              <input 
-                                type="text" 
-                                placeholder="AIzaSy..." 
-                                className="form-input" 
-                                style={{ width: '100%' }}
-                                value={sysGeminiKey} 
-                                onChange={(e) => setSysGeminiKey(e.target.value)} 
-                              />
-                              <span style={{ fontSize: '0.75rem', color: 'var(--text-light)', marginTop: '4px' }}>Powers the real-time tax benefits chat assistant on donation checkout pages.</span>
-                            </div>
-                            <div className="form-group">
-                              <label className="form-label">OpenAI API Key</label>
-                              <div style={{ position: 'relative' }}>
-                                <input 
-                                  type={showOpenaiKey ? "text" : "password"} 
-                                  placeholder="sk-proj-..." 
-                                  className="form-input" 
-                                  value={sysOpenaiKey} 
-                                  onChange={(e) => setSysOpenaiKey(e.target.value)} 
-                                  style={{ width: '100%', paddingRight: '40px' }}
-                                />
-                                <button 
-                                  type="button" 
-                                  onClick={() => setShowOpenaiKey(!showOpenaiKey)} 
-                                  style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'none', cursor: 'pointer', fontSize: '1.1rem', padding: 0, outline: 'none' }}
-                                >
-                                  {showOpenaiKey ? '👁️' : '🙈'}
-                                </button>
-                              </div>
-                              <span style={{ fontSize: '0.75rem', color: 'var(--text-light)', marginTop: '4px' }}>Powers the dynamic Thank-You email copilot inside NGO admin dashboards.</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid var(--border)', paddingTop: '20px', marginTop: '8px' }}>
-                          <button type="submit" className="btn btn-primary" style={{ padding: '10px 24px' }}>
-                            Save System Configurations
-                          </button>
-                        </div>
-                      </form>
-                    </div>
-                  </div>
-                )}
 
               </div>
             )}
@@ -3448,7 +4405,14 @@ export default function App() {
                   </div>
                   <div>
                     <span style={{ color: 'var(--text-secondary)', display: 'block', fontSize: '0.75rem' }}>Bank UTR / RRN Reference</span>
-                    <code>{selectedDonationForModal.rawGatewayResponse?.acquirer_data?.rrn || selectedDonationForModal.rawGatewayResponse?.acquirer_data?.bank_transaction_id || 'RRN-9841029412'}</code>
+                    <code>
+                      {selectedDonationForModal.rawGatewayResponse?.acquirer_data?.rrn || 
+                       selectedDonationForModal.rawGatewayResponse?.acquirer_data?.bank_transaction_id || 
+                       selectedDonationForModal.rawGatewayResponse?.acquirer_data?.upi_transaction_id || 
+                       selectedDonationForModal.rawGatewayResponse?.razorpayPaymentId || 
+                       selectedDonationForModal.gatewayTransactionId || 
+                       'N/A'}
+                    </code>
                   </div>
                 </div>
               </div>
@@ -3511,12 +4475,12 @@ export default function App() {
             <div className="modal-body" style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
               {/* Credentials Box */}
               <div style={{ padding: '16px', borderRadius: 'var(--radius-md)', backgroundColor: '#EFF6FF', border: '1px solid #BFDBFE' }}>
-                <h4 style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: '#1E40AF' }}>🔑 DanaPro API Key & Gateway Credentials</h4>
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: '#1E40AF' }}>🔑 WeGive API Key & Gateway Credentials</h4>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.82rem' }}>
                   <div>
-                    <span style={{ color: '#1E3A8A', fontWeight: 600 }}>DanaPro Campaign API Key: </span>
+                    <span style={{ color: '#1E3A8A', fontWeight: 600 }}>WeGive Campaign API Key: </span>
                     <code style={{ fontSize: '0.85rem', color: '#2563EB', background: '#DBEAFE', padding: '2px 8px', borderRadius: '4px' }}>
-                      {selectedCampForEmbedModal.api_key || `dp_live_${selectedCampForEmbedModal.slug}_19283`}
+                      {selectedCampForEmbedModal.api_key || `wg_live_${selectedCampForEmbedModal.slug}_19283`}
                     </code>
                   </div>
                   <div>
@@ -3528,17 +4492,17 @@ export default function App() {
 
               {/* Option A: JavaScript SDK Embed Code */}
               <div>
-                <h4 style={{ margin: '0 0 8px 0', fontSize: '0.9rem', color: 'var(--primary)' }}>⚡ Option 1: 1-Line DanaPro JS Embed (Add to NGO Landing Page HTML)</h4>
+                <h4 style={{ margin: '0 0 8px 0', fontSize: '0.9rem', color: 'var(--primary)' }}>⚡ Option 1: 1-Line WeGive JS Embed (Add to NGO Landing Page HTML)</h4>
                 <pre style={{ backgroundColor: '#0F172A', color: '#38BDF8', padding: '14px', borderRadius: 'var(--radius-md)', fontSize: '0.78rem', overflowX: 'auto', margin: 0, lineHeight: 1.5 }}>
-{`<!-- 1. Include Razorpay & DanaPro SDK -->
+{`<!-- 1. Include Razorpay & WeGive SDK -->
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script src="http://localhost:5000/api/v1/external/embed.js"></script>
 
-<!-- 2. Call DanaPro.pay() on your Submit/Donate button click -->
+<!-- 2. Call WeGive.pay() on your Submit/Donate button click -->
 <script>
   function handleDonateSubmit() {
-    DanaPro.pay({
-      apiKey: "${selectedCampForEmbedModal.api_key || 'dp_live_' + selectedCampForEmbedModal.slug}",
+    WeGive.pay({
+      apiKey: "${selectedCampForEmbedModal.api_key || 'wg_live_' + selectedCampForEmbedModal.slug}",
       amount: document.getElementById('donation_amount').value,
       currency: "INR",
       name: document.getElementById('donor_name').value,
@@ -3565,12 +4529,12 @@ export default function App() {
                 <pre style={{ backgroundColor: '#0F172A', color: '#34D399', padding: '14px', borderRadius: 'var(--radius-md)', fontSize: '0.78rem', overflowX: 'auto', margin: 0, lineHeight: 1.5 }}>
 {`POST http://localhost:5000/api/v1/external/donations/initiate
 Headers:
-  x-danapro-api-key: "${selectedCampForEmbedModal.api_key || 'dp_live_' + selectedCampForEmbedModal.slug}"
+  x-wegive-api-key: "${selectedCampForEmbedModal.api_key || 'wg_live_' + selectedCampForEmbedModal.slug}"
   Content-Type: application/json
 
 Body:
 {
-  "api_key": "${selectedCampForEmbedModal.api_key || 'dp_live_' + selectedCampForEmbedModal.slug}",
+  "api_key": "${selectedCampForEmbedModal.api_key || 'wg_live_' + selectedCampForEmbedModal.slug}",
   "amount": 1000,
   "currency": "INR",
   "name": "John Doe",

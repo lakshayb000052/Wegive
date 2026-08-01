@@ -28,7 +28,7 @@ CREATE TABLE organizations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
     slug VARCHAR(255) UNIQUE NOT NULL,
-    api_key VARCHAR(255) UNIQUE DEFAULT ('dp_live_' || md5(random()::text)),
+    api_key VARCHAR(255) UNIQUE DEFAULT ('wg_live_' || md5(random()::text)),
     logo_url VARCHAR(2048),
     tax_id_country VARCHAR(10) NOT NULL,
     primary_currency VARCHAR(3) DEFAULT 'INR',
@@ -59,7 +59,7 @@ CREATE TABLE campaigns (
     title VARCHAR(255) NOT NULL,
     description TEXT,
     slug VARCHAR(255) UNIQUE NOT NULL,
-    api_key VARCHAR(255) UNIQUE DEFAULT ('dp_live_' || md5(random()::text)),
+    api_key VARCHAR(255) UNIQUE DEFAULT ('wg_live_' || md5(random()::text)),
     landing_page_url VARCHAR(2048),
     form_fields JSONB DEFAULT '[]'::jsonb,
     is_active BOOLEAN DEFAULT TRUE,
@@ -165,18 +165,32 @@ CREATE TABLE system_settings (
     value TEXT NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 12. Master & NGO Communication Templates (80G, WhatsApp, Email)
+CREATE TABLE IF NOT EXISTS templates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    type VARCHAR(50) NOT NULL, -- '80g_receipt', 'whatsapp_message', 'email_thankyou'
+    name VARCHAR(255) NOT NULL,
+    subject VARCHAR(255),
+    content TEXT NOT NULL,
+    is_default BOOLEAN DEFAULT FALSE,
+    created_by VARCHAR(50) DEFAULT 'system',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
 `;
 
 async function main() {
-  console.log('Starting PostgreSQL Database Schema Initialization...');
   const client = await pool.connect();
   try {
+    console.log('Resetting and purging database tables...');
     await client.query('BEGIN');
-    
-    console.log('Creating clean production database tables...');
+
+    // Create tables
     await client.query(createTablesQuery);
 
-    console.log('Hashing superadmin password dynamically with bcrypt...');
+    // Seed Superadmin
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash('Lakshay@123', salt);
 
@@ -199,6 +213,47 @@ async function main() {
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
       [geminiKey, openaiKey]
     );
+
+    console.log('Seeding default Master System Templates (80G, WhatsApp, Email)...');
+    
+    // Default 80G Receipt Master Template
+    await client.query(`
+      INSERT INTO templates (type, name, subject, content, is_default, created_by)
+      VALUES (
+        '80g_receipt', 
+        'Default 80G Statutory Certificate Layout', 
+        'Official 80G Tax Exemption Certificate', 
+        '<div style="font-family: sans-serif; padding: 24px; color: #1E293B;">\n  <h1 style="color: #0D9488; text-align: center;">DONATION RECEIPT & CERTIFICATE</h1>\n  <hr style="border: none; border-top: 2px solid #0D9488; margin: 16px 0;" />\n  <div style="display: flex; justify-space-between;">\n    <div>\n      <h3>RECIPIENT ORGANISATION</h3>\n      <p><strong>{{ngo_name}}</strong></p>\n      <p>URN: URN-{{ngo_urn}}</p>\n      <p>Signatory: {{ngo_signatory}}</p>\n    </div>\n    <div>\n      <h3>DONOR DETAILS</h3>\n      <p>Name: <strong>{{donor_name}}</strong></p>\n      <p>Email: {{donor_email}}</p>\n      <p>PAN: {{donor_tax_id}}</p>\n    </div>\n  </div>\n  <div style="margin-top: 20px; padding: 16px; background-color: #F8FAFC; border-radius: 8px;">\n    <p>Campaign: <strong>{{campaign_title}}</strong></p>\n    <p>Amount Donated: <strong style="font-size: 1.2rem; color: #059669;">{{donation_currency}} {{donation_amount}}</strong></p>\n    <p>Date: {{donation_date}}</p>\n    <p>Transaction ID: <code>{{transaction_id}}</code></p>\n  </div>\n  <p style="font-size: 0.8rem; color: #64748B; margin-top: 24px; text-align: center;">\n    Statutory Declaration: Donations qualify for 80G tax benefits under Income Tax Act, 1961.\n  </p>\n</div>', 
+        TRUE, 
+        'system'
+      ) ON CONFLICT DO NOTHING;
+    `);
+
+    // Default WhatsApp Master Template
+    await client.query(`
+      INSERT INTO templates (type, name, subject, content, is_default, created_by)
+      VALUES (
+        'whatsapp_message', 
+        'Default WhatsApp Donation Success Alert', 
+        'WhatsApp Donation Alert', 
+        'Dear {{donor_name}},\n\nThank you for your generous contribution of {{donation_currency}} {{donation_amount}} to support "{{campaign_title}}" by {{ngo_name}}.\n\nTransaction Ref: {{transaction_id}}\nPAN / Tax ID: {{donor_tax_id}}\n\nYour 80G Tax Exemption Receipt can be downloaded here: {{receipt_url}}\n\nWith gratitude,\n{{ngo_name}}', 
+        TRUE, 
+        'system'
+      ) ON CONFLICT DO NOTHING;
+    `);
+
+    // Default Email Master Template
+    await client.query(`
+      INSERT INTO templates (type, name, subject, content, is_default, created_by)
+      VALUES (
+        'email_thankyou', 
+        'Default Email Thank-You Notification', 
+        'Thank you for your contribution to {{ngo_name}}!', 
+        '<div style="font-family: Arial, sans-serif; padding: 24px; max-width: 600px; margin: auto; border: 1px solid #E2E8F0; border-radius: 12px; color: #0F172A;">\n  <h2 style="color: #2563EB; margin-top: 0;">Thank You for Your Generous Contribution!</h2>\n  <p>Dear <strong>{{donor_name}}</strong>,</p>\n  <p>We gratefully acknowledge your contribution of <strong>{{donation_currency}} {{donation_amount}}</strong> in support of <strong>"{{campaign_title}}"</strong> organized by <strong>{{ngo_name}}</strong>.</p>\n  <div style="background: #F1F5F9; padding: 16px; border-radius: 8px; margin: 16px 0; font-size: 0.9rem;">\n    <div><strong>Transaction Reference:</strong> <code>{{transaction_id}}</code></div>\n    <div><strong>Date of Payment:</strong> {{donation_date}}</div>\n    <div><strong>Tax Identification (PAN):</strong> {{donor_tax_id}}</div>\n  </div>\n  <p>Your official tax exemption receipt is ready for download:</p>\n  <p style="text-align: center; margin: 20px 0;">\n    <a href="{{receipt_url}}" style="background: #2563EB; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">📥 Download 80G PDF Receipt</a>\n  </p>\n  <hr style="border: none; border-top: 1px solid #E2E8F0; margin: 20px 0;" />\n  <p style="font-size: 0.78rem; color: #64748B; text-align: center;">This notification was dispatched automatically by DanaPro on behalf of {{ngo_name}} (80G URN: {{ngo_urn}}).</p>\n</div>', 
+        TRUE, 
+        'system'
+      ) ON CONFLICT DO NOTHING;
+    `);
 
     await client.query('COMMIT');
     console.log('====================================================');

@@ -36,9 +36,23 @@ app.use(express.json({
 // Serve generated compliance receipt PDFs statically
 app.use('/receipts', express.static(path.join(__dirname, '../receipts')));
 
-// Base health check
-app.get(['/health', '/api/health'], (req: Request, res: Response) => {
-  res.status(200).json({ status: 'ok', service: 'WeGive API', timestamp: new Date().toISOString() });
+// Base health check & root landing handler
+app.get(['/', '/health', '/api/health'], (req: Request, res: Response) => {
+  res.status(200).json({
+    status: 'ok',
+    service: 'WeGive Core Backend API Engine',
+    message: 'API Server is live and operational',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: '/api/health',
+      auth: '/api/auth',
+      campaigns: '/api/campaigns',
+      donations: '/api/donations',
+      superadmin: '/api/superadmin',
+      external: '/api/v1/external'
+    }
+  });
 });
 
 // Mounted Routes

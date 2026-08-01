@@ -329,8 +329,16 @@ const getWsUrl = () => {
 
 const apiFetch = (path: string, options: RequestInit = {}) => {
   const url = path.startsWith('http') ? path : `${getApiBase()}${path}`;
+  const token = typeof window !== 'undefined' ? localStorage.getItem('wegive_token') : null;
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string> || {})
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
   return fetch(url, {
     ...options,
+    headers,
     credentials: 'include'
   });
 };
@@ -1111,6 +1119,9 @@ export default function App() {
       });
       const data = await response.json();
       if (data.success) {
+        if (data.token) {
+          localStorage.setItem('wegive_token', data.token);
+        }
         setUserSession(data);
         setLoginPassword('');
         if (redirectPath) {
@@ -1124,7 +1135,7 @@ export default function App() {
           }
         }
       } else {
-        setLoginError(data.message);
+        setLoginError(data.message || 'Invalid credentials');
       }
     } catch (err: any) {
       setLoginError(err.message);
@@ -1137,6 +1148,7 @@ export default function App() {
     } catch (err) {
       console.error('Logout error:', err);
     }
+    localStorage.removeItem('wegive_token');
     setUserSession(null);
     setRedirectPath(null);
     navigate('/');

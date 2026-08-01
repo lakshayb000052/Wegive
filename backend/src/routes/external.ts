@@ -49,6 +49,10 @@ router.post('/donations/initiate', async (req: Request, res: Response): Promise<
       FROM campaigns c
       JOIN organizations o ON c.organization_id = o.id
       WHERE c.api_key = $1 OR o.api_key = $1
+         OR REPLACE(c.api_key, 'wg_live_', 'wg_test_') = $1
+         OR REPLACE(c.api_key, 'wg_test_', 'wg_live_') = $1
+         OR REPLACE(o.api_key, 'wg_live_', 'wg_test_') = $1
+         OR REPLACE(o.api_key, 'wg_test_', 'wg_live_') = $1
     `;
     let queryParams: any[] = [apiKey];
 

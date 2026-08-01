@@ -4520,11 +4520,11 @@ export default function App() {
                   <div>
                     <span style={{ color: '#1E3A8A', fontWeight: 600 }}>WeGive Campaign API Key: </span>
                     <code style={{ fontSize: '0.85rem', color: '#2563EB', background: '#DBEAFE', padding: '2px 8px', borderRadius: '4px' }}>
-                      {selectedCampForEmbedModal.api_key || `wg_live_${selectedCampForEmbedModal.slug}_19283`}
+                      {selectedCampForEmbedModal.api_key || `wg_live_${selectedCampForEmbedModal.slug}`}
                     </code>
                   </div>
                   <div>
-                    <span style={{ color: '#1E3A8A', fontWeight: 600 }}>Configured Landing Page URL: </span>
+                    <span style={{ color: '#1E3A8A', fontWeight: 600 }}>Configured Landing Page Domain: </span>
                     <code>{selectedCampForEmbedModal.landing_page_url || 'Not set (will accept requests from any domain)'}</code>
                   </div>
                 </div>

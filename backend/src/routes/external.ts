@@ -71,6 +71,19 @@ router.post('/donations/initiate', async (req: Request, res: Response): Promise<
     const campaign = campaignRes.rows[0];
     const organizationId = campaign.org_id;
 
+    // Enforce optional Landing Page Domain restriction if configured on campaign
+    const requestOrigin = (req.headers.origin || req.headers.referer || '') as string;
+    if (campaign.landing_page_url && campaign.landing_page_url.trim().length > 0 && requestOrigin) {
+      try {
+        const allowedHost = new URL(campaign.landing_page_url).hostname.toLowerCase();
+        const incomingHost = new URL(requestOrigin).hostname.toLowerCase();
+        if (allowedHost !== incomingHost && !incomingHost.includes('localhost') && !incomingHost.includes('onrender.com')) {
+          res.status(403).json({ error: `Domain Restriction Security Block: Requests for this campaign are restricted to ${allowedHost}` });
+          return;
+        }
+      } catch (e) {}
+    }
+
     // 2. Insert or update Donor in database
     const donorRes = await pool.query(
       `INSERT INTO donors (organization_id, name, email, phone, tax_id)

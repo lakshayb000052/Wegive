@@ -579,7 +579,17 @@ router.get('/embed.js', (req: Request, res: Response) => {
       return;
     }
     
-    var endpoint = (config.serverUrl || 'http://localhost:5000') + '/api/v1/external/donations/initiate';
+    var currentScript = document.currentScript;
+    var inferredServerUrl = '';
+    if (currentScript && currentScript.src) {
+      try {
+        var parsedUrl = new URL(currentScript.src);
+        inferredServerUrl = parsedUrl.origin;
+      } catch (e) {}
+    }
+    
+    var baseServerUrl = config.serverUrl || inferredServerUrl || 'http://localhost:5000';
+    var endpoint = baseServerUrl + '/api/v1/external/donations/initiate';
     
     var payload = {
       api_key: config.apiKey,
@@ -610,7 +620,7 @@ router.get('/embed.js', (req: Request, res: Response) => {
       }
       
       var completeVerify = function(resp) {
-        fetch((config.serverUrl || 'http://localhost:5000') + '/api/v1/external/donations/verify', {
+        fetch(baseServerUrl + '/api/v1/external/donations/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
